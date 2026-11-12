@@ -18,7 +18,8 @@ PULSE has three parts on one scrolling page:
    into the grooves with a magnification readout (×1 to ×355) until the grooves become a road to the horizon.
 2. **The record library.** That road opens into a full-screen 3D aisle of shelves: rows of spines, LED-lit
    ledges, records pulled halfway out, genre signs. Two featured records hang from the rail. Then the camera
-   swings round to a side view of the whole collection, all 14 records in a diagonal row: hover, focus or tap
+   swings round to a side view of the whole collection: a diagonal row that repeats endlessly and drifts past
+   on its own (it holds still while you choose). Hover, focus or tap
    one and the sleeve lifts with the vinyl sliding out; click to play. Each scroll, swipe or arrow key moves
    exactly one stop, and scrolling up plays everything in reverse, back to the vinyl. **Enter the app** stays
    visible the whole way.

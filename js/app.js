@@ -719,8 +719,9 @@
      ===================================================================== */
   const AISLE = D.featured.slice(0, 2);   // the two records hanging in the aisle
   const STACK_STOPS = 3;                  // scroll stops along the whole-collection row
+  const STACK_COPIES = 3;                 // the 14 records repeat so the row looks endless
   const BAYS = 9;
-  const J = { vh: 0, lead: 0, unit: 0, stops: [], end: 0, gap: 520, front: -1, zone: '', inJ: null, raf: 0, recs: [], bays: [], w: 0, card: 200, capDefault: null };
+  const J = { vh: 0, lead: 0, unit: 0, stops: [], end: 0, gap: 520, front: -1, zone: '', inJ: null, raf: 0, recs: [], bays: [], w: 0, card: 200, capDefault: null, cards: [], stackT: 0, drift: 0, hold: false };
   const recPos = function (i) { return i % 2 ? { x: 0.34, y: -0.08 } : { x: -0.34, y: 0.05 }; };
 
   function buildAisle() {
@@ -754,20 +755,29 @@
     el.hudTicks.innerHTML = AISLE.map(function () { return '<i></i>'; }).join('');
 
     // The whole collection as a diagonal row of sleeves
-    el.stackRow.innerHTML = D.featured.map(function (id, i) {
-      const t = TRACK[id], al = ALBUM[t.album], name = t.title + ' by ' + ARTIST[t.artist].name;
-      return '<button type="button" class="sc" style="--i:' + i + '" data-action="play-track" data-id="' + id + '" data-ctx="all" data-title="' + esc(name) + '" aria-label="Play ' + esc(name) + '">' +
-        '<span class="sc__in"><span class="sc__vinyl"><span class="sc__lbl">' + coverArt(al) + '</span></span>' +
-        '<span class="sc__sleeve">' + coverArt(al) + '<span class="rec__sticker">' + esc(t.title) + '</span></span></span></button>';
-    }).join('');
+    // The collection repeats so the row never ends; only the first copy is exposed to keyboard and screen readers.
+    let cards = '';
+    for (let copy = 0; copy < STACK_COPIES; copy++) {
+      cards += D.featured.map(function (id, i) {
+        const t = TRACK[id], al = ALBUM[t.album], name = t.title + ' by ' + ARTIST[t.artist].name;
+        return '<button type="button" class="sc" style="--i:' + (copy * D.featured.length + i) + '" data-action="play-track" data-id="' + id + '" data-ctx="all" data-title="' + esc(name) + '" aria-label="Play ' + esc(name) + '"' +
+          (copy ? ' tabindex="-1" aria-hidden="true"' : '') + '>' +
+          '<span class="sc__in"><span class="sc__vinyl"><span class="sc__lbl">' + coverArt(al) + '</span></span>' +
+          '<span class="sc__sleeve">' + coverArt(al) + '<span class="rec__sticker">' + esc(t.title) + '</span></span></span></button>';
+      }).join('');
+    }
+    el.stackRow.innerHTML = cards;
+    J.cards = $$('.sc', el.stackRow);
     const cap = function (id) {
       const t = TRACK[id];
       el.stackCap.innerHTML = t ? '<b>' + esc(t.title) + '</b><span>' + esc(ARTIST[t.artist].name) + ' · ' + esc(GENRE[t.genre].name) + (id === state.currentId && Engine.isPlaying() ? ' · playing' : '') + '</span>' : '';
     };
     J.capDefault = function () { const h = $('.sc:hover', el.stackRow) || (document.activeElement && document.activeElement.classList.contains('sc') ? document.activeElement : null); cap(h ? h.dataset.id : (Engine.isPlaying() ? state.currentId : '')); };
-    el.stackRow.addEventListener('mouseover', function (e) { const c = e.target.closest('.sc'); if (c) cap(c.dataset.id); });
-    el.stackRow.addEventListener('focusin', function (e) { const c = e.target.closest('.sc'); if (c) cap(c.dataset.id); });
-    el.stackRow.addEventListener('mouseleave', function () { J.capDefault(); });
+    // The row drifts on its own; it holds still while you are choosing a record
+    el.stackRow.addEventListener('mouseover', function (e) { const c = e.target.closest('.sc'); if (c) { J.hold = true; cap(c.dataset.id); } });
+    el.stackRow.addEventListener('focusin', function (e) { const c = e.target.closest('.sc'); if (c) { J.hold = true; cap(c.dataset.id); } });
+    el.stackRow.addEventListener('mouseleave', function () { J.hold = false; J.capDefault(); });
+    el.stackRow.addEventListener('focusout', function () { J.hold = false; });
     if (window.matchMedia && window.matchMedia('(hover: none)').matches) el.stackHint.textContent = 'Tap a record to pull it out and play it. Swipe for more.';
 
     // Loading screen dressing
@@ -893,11 +903,12 @@
     const stackOn = s > 0.02;
     el.stack.style.visibility = stackOn ? 'visible' : 'hidden';
     if (stackOn) {
-      const step = J.card * 0.46;
       el.stack.style.opacity = String(smooth(0.1, 0.6, s));
       el.stackRow.style.left = n1(50 - 22 * es) + '%';
       el.stackRow.style.top = n1(43 + 21 * es) + '%';
-      el.stackRow.style.transform = 'rotateX(' + n1(-17 * es) + 'deg) rotateY(' + n1(-56 * es) + 'deg) translateZ(' + n1(t * 4 * step) + 'px)';
+      el.stackRow.style.transform = 'rotateX(' + n1(-17 * es) + 'deg) rotateY(' + n1(-56 * es) + 'deg)';
+      J.stackT = t;
+      layoutStack();
     }
 
     const zone = p < 0.5 ? 'intro' : s < 0.5 ? 'aisle' : 'stack';
@@ -907,7 +918,31 @@
       el.aisle.inert = zone !== 'aisle';
       el.stack.inert = zone !== 'stack';
       el.pin.dataset.zone = zone;
+      if (zone === 'stack' && !driftRaf) { driftAt = 0; driftRaf = requestAnimationFrame(driftLoop); }
     }
+  }
+
+  /* Endless row: every record's place is taken modulo the row length, so records that pass the camera
+     come back in at the far end. Scrolling moves the row; it also drifts slowly on its own. */
+  let driftRaf = 0, driftAt = 0;
+  function layoutStack() {
+    const step = J.card * 0.46, L = J.cards.length * step, pad = 4 * step;
+    const off = (J.stackT * 4 + J.drift) * step;
+    J.cards.forEach(function (c, i) {
+      const pos = ((((i * step - off + pad) % L) + L) % L) - pad;
+      const o = Math.min(clamp((pos + pad) / (0.7 * step), 0, 1), clamp((L - pad - pos) / (5 * step), 0, 1));
+      c.style.transform = 'translateZ(' + n1(-pos) + 'px)';
+      c.style.opacity = o.toFixed(2);
+      c.style.pointerEvents = o < 0.5 ? 'none' : '';
+    });
+  }
+  function driftLoop(now) {
+    driftRaf = 0;
+    if (J.zone !== 'stack' || reduceMotion.matches) return;
+    if (driftAt && !J.hold && !tween.on) J.drift += Math.min(0.1, (now - driftAt) / 1000) * 0.4;
+    driftAt = now;
+    layoutStack();
+    driftRaf = requestAnimationFrame(driftLoop);
   }
   function onScroll() {
     if (!J.raf) J.raf = requestAnimationFrame(updateJourney);
