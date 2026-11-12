@@ -4,7 +4,7 @@ A fictional Y2K-style music streaming platform. Dig through a 3D record library,
 
 **Competition brief:** #3, Music Streaming Interface
 **Team:** `TEAM NAME` · `Member 1`, `Member 2`, `Member 3`
-**Live site:** `https://YOUR-PROJECT.vercel.app`
+**Live site:** https://pulse-music-iota.vercel.app
 
 > All artists, albums, tracks, places and listener counts in PULSE are fictional sample data.
 > No real music, no backend, no login, no payments, no tracking.
