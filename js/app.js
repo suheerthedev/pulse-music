@@ -211,8 +211,9 @@
     sheet: $('#sheet'), backdrop: $('#backdrop'), toast: $('#toast'), player: $('#player'),
     seek: $('#seek'), volume: $('#volume'), mute: $('#mute'), pCur: $('#pCur'), pDur: $('#pDur'),
     pTitle: $('#pTitle'), pArtist: $('#pArtist'), pArt: $('#pArt'), pLike: $('#pLike'),
-    lcdTitle: $('#lcdTitle'), lcdTime: $('#lcdTime'), lcdMeta: $('#lcdMeta'), discLabel: $('#discLabel'),
-    viz: $('#viz'), heroPlay: $('#heroPlay'), pPlay: $('#pPlay')
+    viz: $('#viz'), heroPlay: $('#heroPlay'), pPlay: $('#pPlay'),
+    stacks: $('#stacks'), world: $('#stacksWorld'), hudTitle: $('#hudTitle'), hudMeta: $('#hudMeta'),
+    hudLike: $('#hudLike'), hudTicks: $('#hudTicks'), intro: $('#intro')
   };
 
   function renderChips() {
@@ -290,10 +291,8 @@
     const t = TRACK[state.currentId];
     document.body.classList.toggle('is-playing', playing);
     $$('.js-play-icon').forEach(function (s) { s.innerHTML = playing ? ICON.pause : ICON.play; });
-    $$('.js-play-text').forEach(function (s) { s.textContent = playing ? 'Pause' : 'Play'; });
-    const label = (playing ? 'Pause' : 'Play') + (t ? ' ' + t.title : '');
-    el.pPlay.setAttribute('aria-label', label);
-    el.heroPlay.setAttribute('aria-label', label);
+    el.pPlay.setAttribute('aria-label', (playing ? 'Pause' : 'Play') + (t ? ' ' + t.title : ''));
+    syncStacks();
     document.title = (playing && t ? '▶ ' + t.title + ' · ' : '') + 'PULSE · music streaming demo';
   }
 
@@ -307,9 +306,6 @@
     el.pArtist.setAttribute('aria-label', 'Artist: ' + a.name + '. Open profile');
     el.pArt.innerHTML = coverArt(al, 'Cover of ' + al.title + ': ' + al.artDesc);
     el.pLike.innerHTML = likeBtn(t);
-    el.discLabel.innerHTML = coverArt(al);
-    el.lcdTitle.textContent = t.title;
-    el.lcdMeta.textContent = a.name + ' · ' + t.bpm + ' BPM · ' + t.keyName;
     el.seek.max = String(n1(dur));
     el.pDur.textContent = fmt(Math.round(dur));
     lastSec = -1;
@@ -330,10 +326,12 @@
     if (Engine.play() === false) toast('This browser does not support Web Audio, so playback is unavailable.');
   }
 
-  function loadTrack(id, autoplay) {
+  /* follow = false keeps the record aisle where the listener is browsing */
+  function loadTrack(id, autoplay, follow) {
     state.currentId = id;
     Engine.load(TRACK[id]);
     updateNowPlaying();
+    if (follow !== false) goTo(ORDER.indexOf(id));
     if (autoplay) startPlayback();
     syncPlayButtons();
     syncTracks();
@@ -356,16 +354,192 @@
     loadTrack(q[0], true);
   }
 
-  function step(dir) {
+  function step(dir, auto) {
     const q = state.queue.length ? state.queue : D.featured;
+    const wasFront = ORDER[stacks.idx] === state.currentId;
     let i = q.indexOf(state.currentId);
     if (dir < 0 && Engine.position() > 3) { Engine.seek(0); if (!Engine.isPlaying()) startPlayback(); paint(); return; }
     i = i === -1 ? 0 : (i + dir + q.length) % q.length;
-    loadTrack(q[i], true);
+    loadTrack(q[i], true, auto ? wasFront : true);
+  }
+
+  /* ---------- Record aisle (3D stacks) ---------- */
+  const ORDER = D.featured;
+  const STEP = 520; // px between records; must match --gap in css/style.css
+  const stacks = { idx: 0, recs: [], walls: [] };
+  const recPos = function (i) { return i % 2 ? { x: 0.6, y: -0.1 } : { x: -0.6, y: 0.06 }; };
+
+  function buildStacks() {
+    const n = ORDER.length;
+    let html = '';
+    ORDER.forEach(function (id, i) {
+      const t = TRACK[id], al = ALBUM[t.album], pos = recPos(i);
+      html += '<div class="rec" data-i="' + i + '" style="--i:' + i + ';--x:' + pos.x + ';--y:' + pos.y + '">' +
+        '<div class="rec__vinyl"><div class="rec__spin"><div class="rec__label">' + coverArt(al) + '</div></div></div>' +
+        '<div class="rec__sleeve">' + coverArt(al) + '<span class="rec__sticker">' + esc(t.title) + '</span></div></div>';
+    });
+    // Face-out sleeves on the shelves, halfway between stops
+    ORDER.forEach(function (id, i) {
+      const al = ALBUM[TRACK[ORDER[(i + 5) % n]].album];
+      html += '<div class="rec rec--wall rec--wall-' + (i % 2 ? 'l' : 'r') + '" data-i="' + i + '" style="--i:' + (i + 0.5) + ';--y:' + (i % 2 ? -0.35 : 0.2) + '">' + coverArt(al) + '</div>';
+    });
+    el.world.innerHTML = html;
+    stacks.recs = $$('.rec', el.world);
+    el.hudTicks.innerHTML = ORDER.map(function () { return '<i></i>'; }).join('');
+    stacks.walls = [
+      [$('.wall--l .plane__tex', el.stacks), 'X', -1], [$('.wall--r .plane__tex', el.stacks), 'X', 1],
+      [$('.floor .plane__tex', el.stacks), 'Y', 1], [$('.ceil .plane__tex', el.stacks), 'Y', -1]
+    ];
+  }
+
+  /* Slide the aisle textures by one record gap per step; they repeat, so they can snap back unseen. */
+  function runWalls(steps, duration, easing) {
+    if (reduceMotion.matches || !steps) return null;
+    const n = Math.min(3, Math.abs(steps)), dir = steps > 0 ? 1 : -1;
+    let last = null;
+    stacks.walls.forEach(function (w) {
+      if (!w[0] || !w[0].animate) return;
+      last = w[0].animate(
+        [{ transform: 'translate' + w[1] + '(0px)' }, { transform: 'translate' + w[1] + '(' + (w[2] * dir * STEP) + 'px)' }],
+        { duration: (duration || 850) / n, iterations: n, easing: easing || (n === 1 ? 'cubic-bezier(.3, .1, .2, 1)' : 'linear') }
+      );
+    });
+    return last;
+  }
+
+  function syncStacks() {
+    const front = TRACK[ORDER[stacks.idx]];
+    if (!front) return;
+    const playing = Engine.isPlaying();
+    const on = front.id === state.currentId && playing;
+    $('#heroPlayIcon').innerHTML = on ? ICON.pause : ICON.play;
+    $('#heroPlayText').textContent = on ? 'Pause' : 'Play';
+    el.heroPlay.setAttribute('aria-label', (on ? 'Pause ' : 'Play ') + front.title + ' by ' + ARTIST[front.artist].name);
+    stacks.recs.forEach(function (r) {
+      r.classList.toggle('is-spinning', playing && ORDER[Number(r.dataset.i)] === state.currentId && !r.classList.contains('rec--wall'));
+    });
+  }
+
+  function goTo(i) {
+    const n = ORDER.length;
+    if (i < 0 || isNaN(i)) i = 0;
+    i = ((i % n) + n) % n;
+    const moved = i - stacks.idx;
+    stacks.idx = i;
+    const pos = recPos(i), t = TRACK[ORDER[i]];
+    el.world.style.setProperty('--ci', String(i));
+    el.world.style.setProperty('--cx', String(pos.x));
+    el.world.style.setProperty('--cy', String(pos.y));
+    stacks.recs.forEach(function (r) {
+      const d = Number(r.dataset.i) - i;
+      r.dataset.d = d < 0 ? 'past' : d > 3 ? 'far' : String(d);
+      r.classList.toggle('is-front', d === 0);
+    });
+    $$('i', el.hudTicks).forEach(function (tick, k) { tick.classList.toggle('is-on', k === i); });
+    el.hudTitle.textContent = t.title;
+    el.hudMeta.textContent = ARTIST[t.artist].name + ' · ' + GENRE[t.genre].name + ' · ' + t.bpm + ' BPM';
+    el.hudLike.innerHTML = likeBtn(t);
+    runWalls(moved);
+    syncStacks();
+  }
+
+  function playBrowse() {
+    const id = ORDER[stacks.idx];
+    if (id === state.currentId) { togglePlay(); return; }
+    state.queue = ORDER.slice();
+    loadTrack(id, true);
+  }
+
+  /* Fly in from the far end of the aisle (runs once, when the loading screen is dismissed) */
+  function arrive() {
+    if (!el.stacks.classList.contains('is-arriving')) return;
+    void el.stacks.offsetWidth;
+    el.stacks.classList.add('is-landing');
+    el.stacks.classList.remove('is-arriving');
+    const a = runWalls(3, 780, 'linear');
+    if (a && a.finished) a.finished.then(function () { runWalls(1, 700, 'cubic-bezier(.16, .8, .2, 1)'); }).catch(function () {});
+    setTimeout(function () { el.stacks.classList.remove('is-landing'); }, 1600);
+  }
+
+  /* Swipe sideways (or horizontal wheel) to move along the aisle; vertical scrolling stays free */
+  (function () {
+    let sx = 0, sy = 0, down = false, swiped = false, wheelAt = 0;
+    el.stacks.addEventListener('pointerdown', function (e) { down = true; swiped = false; sx = e.clientX; sy = e.clientY; });
+    el.stacks.addEventListener('pointerup', function (e) {
+      if (!down) return;
+      down = false;
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      if (Math.abs(dx) > 44 && Math.abs(dx) > Math.abs(dy) * 1.4) { swiped = true; goTo(stacks.idx + (dx < 0 ? 1 : -1)); }
+    });
+    el.stacks.addEventListener('pointercancel', function () { down = false; });
+    el.stacks.addEventListener('click', function (e) {
+      if (swiped) { swiped = false; e.stopPropagation(); e.preventDefault(); return; }
+      const r = e.target.closest ? e.target.closest('.rec') : null;
+      if (!r || r.classList.contains('rec--wall')) return;
+      if (r.dataset.d === '0') playBrowse(); else goTo(Number(r.dataset.i));
+    }, true);
+    el.stacks.addEventListener('wheel', function (e) {
+      if (Math.abs(e.deltaX) < 24 || Math.abs(e.deltaX) < Math.abs(e.deltaY) * 1.5) return;
+      e.preventDefault();
+      const now = Date.now();
+      if (now - wheelAt < 520) return;
+      wheelAt = now;
+      goTo(stacks.idx + (e.deltaX > 0 ? 1 : -1));
+    }, { passive: false });
+    el.stacks.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowRight') { e.preventDefault(); goTo(stacks.idx + 1); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); goTo(stacks.idx - 1); }
+    });
+  })();
+
+  /* ---------- Loading screen ---------- */
+  function initIntro() {
+    const intro = el.intro;
+    const locked = [$('#skipLink'), $('#top'), $('#main'), $('#foot'), el.player];
+    const labels = ['HYPERPOP', 'SYNTHWAVE', 'LO-FI', 'DRUM & BASS', 'AMBIENT', 'HOUSE', 'PLAYLISTS', 'ALBUMS', 'ARTISTS', 'LIKES'];
+    let leaving = false;
+
+    $('#introWedges').innerHTML = D.albums.map(function (al, i) {
+      const a1 = (i * 60 - 90) * Math.PI / 180, a2 = ((i + 1) * 60 - 90) * Math.PI / 180;
+      const pt = function (a) { return 'calc(50% + ' + n1(Math.cos(a) * 160) + 'vmax) calc(50% + ' + n1(Math.sin(a) * 160) + 'vmax)'; };
+      const mid = (a1 + a2) / 2;
+      return '<div class="wedge" style="--n:' + i + ';clip-path:polygon(50% 50%, ' + pt(a1) + ', ' + pt(a2) + ')">' +
+        '<div class="wedge__art" style="left:calc(50% + ' + n1(Math.cos(mid) * 40) + 'vmax);top:calc(50% + ' + n1(Math.sin(mid) * 40) + 'vmax)">' + coverArt(al) + '</div></div>';
+    }).join('');
+    $('#introLabels').innerHTML = labels.map(function (name, i) {
+      const off = (50 + ((18 + i * 36) / 360) * 100) % 100;
+      return '<text style="--n:' + i + '"><textPath href="#introOuter" startOffset="' + n1(off) + '%" text-anchor="middle">' + esc(name) + '</textPath></text>';
+    }).join('');
+
+    document.documentElement.classList.add('intro-open');
+    locked.forEach(function (n) { n.inert = true; });
+    const enter = $('#introEnter'), hint = $('#introHint');
+    setTimeout(function () {
+      intro.classList.add('is-ready');
+      if (!leaving) hint.textContent = 'Tap the record to tune in';
+    }, reduceMotion.matches ? 0 : 2600);
+    try { enter.focus({ preventScroll: true }); } catch (e) { /* older browsers */ }
+
+    function leave() {
+      if (leaving) return;
+      leaving = true;
+      intro.classList.add('is-ready', 'is-leaving');
+      const quick = reduceMotion.matches;
+      setTimeout(arrive, quick ? 0 : 480);
+      setTimeout(function () {
+        intro.hidden = true;
+        document.documentElement.classList.remove('intro-open');
+        locked.forEach(function (n) { n.inert = false; });
+        try { el.heroPlay.focus({ preventScroll: true }); } catch (e) { /* older browsers */ }
+      }, quick ? 0 : 1200);
+    }
+    enter.addEventListener('click', leave);
+    $('#introSkip').addEventListener('click', leave);
+    intro.addEventListener('keydown', function (e) { if (e.key === 'Escape') leave(); });
   }
 
   Engine.onState(function () { syncPlayButtons(); syncTracks(); if (Engine.isPlaying()) startLoop(); else paint(); });
-  Engine.onEnded(function () { step(1); });
+  Engine.onEnded(function () { step(1, true); });
 
   /* ---------- Progress + visualizer loop ---------- */
   let raf = 0, lastSec = -1, scrubbing = false, bins = null;
@@ -379,7 +553,6 @@
     lastSec = s;
     const dur = fmt(Math.round(Engine.duration()));
     el.pCur.textContent = fmt(s);
-    el.lcdTime.textContent = fmt(s) + ' / ' + dur;
     el.seek.setAttribute('aria-valuetext', fmt(s) + ' of ' + dur);
   }
 
@@ -394,7 +567,7 @@
   /* LCD-style segmented spectrum. With reduced motion it shows a still level pattern instead. */
   function drawViz() {
     if (!vctx) return;
-    const W = el.viz.width, H = el.viz.height, N = 24, ROWS = 6;
+    const W = el.viz.width, H = el.viz.height, N = W > 900 ? 64 : 40, ROWS = 3;
     const playing = Engine.isPlaying(), an = Engine.analyser();
     const live = playing && an && !reduceMotion.matches;
     if (live) {
@@ -412,10 +585,10 @@
         for (let k = a; k < b; k++) if (bins[k] > m) m = bins[k];
         level = Math.max(1, Math.min(ROWS, Math.round((m / 255) * ROWS * (1 + (i / N) * 0.7))));
       } else if (playing) {
-        level = 2 + ((i * 7) % 4);
+        level = 1 + ((i * 7) % 3);
       }
       for (let r = 0; r < ROWS; r++) {
-        vctx.fillStyle = r < level ? (r >= ROWS - 2 ? '#FF3D9A' : '#2CE6D6') : 'rgba(44, 230, 214, .14)';
+        vctx.fillStyle = r < level ? (r >= ROWS - 1 ? '#FF3D9A' : '#2CE6D6') : 'rgba(44, 230, 214, .16)';
         vctx.fillRect(i * (bw + gap), H - (r + 1) * bh - r * gap, bw, bh);
       }
     }
@@ -624,6 +797,9 @@
       case 'next': step(1); break;
       case 'prev': step(-1); break;
       case 'play-track': playTrack(id, t.dataset.ctx); break;
+      case 'play-browse': playBrowse(); break;
+      case 'browse-next': goTo(stacks.idx + 1); break;
+      case 'browse-prev': goTo(stacks.idx - 1); break;
       case 'play-list': playList(t.dataset.ctx); break;
       case 'like': toggleLike(id, t); break;
       case 'mute': toggleMute(); break;
@@ -656,21 +832,13 @@
   if (window.ResizeObserver) new ResizeObserver(measure).observe(el.player);
 
   /* ---------- Boot ---------- */
+  buildStacks();
   renderChips();
   renderPlaylists();
   renderLibrary();
   state.lastVolume = state.volume || 80;
   applyVolume(state.volume, false);
-  loadTrack(D.featured[0], false);
+  loadTrack(ORDER[0], false);
   measure();
-  if (!reduceMotion.matches) {
-    // Part of the one boot moment: the LCD greets you, then shows the loaded track.
-    el.lcdTitle.textContent = 'HELLO :)';
-    el.lcdMeta.textContent = 'PULSE OS · ' + D.tracks.length + ' tracks ready';
-    setTimeout(function () {
-      const t = TRACK[state.currentId], a = ARTIST[t.artist];
-      el.lcdTitle.textContent = t.title;
-      el.lcdMeta.textContent = a.name + ' · ' + t.bpm + ' BPM · ' + t.keyName;
-    }, 1500);
-  }
+  if (el.intro) initIntro(); else arrive();
 })();

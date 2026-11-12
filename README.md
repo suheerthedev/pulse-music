@@ -11,9 +11,14 @@ A fictional Y2K-style music streaming interface. Find a track and play it.
 
 ## What it is
 
-PULSE is styled as a translucent portable disc player. The hero is the working player itself:
-a spinning disc under a glass lid, an LCD with a live spectrum, and one pink Play button.
-The same player stays docked at the bottom of the screen while you browse.
+PULSE opens on a loading screen with one big vinyl record. A dot orbits it while the ring fills,
+genre names appear around the edge and album covers fan in behind. Tap the record and you fly
+into a 3D record-shop aisle: every song is a vinyl in its sleeve, and you move down the aisle one
+record at a time with a swipe, the arrow keys or the buttons. Play spins the record in front of you.
+
+Below the aisle is the full library (search, genre filter, playlists, albums, artists), and the
+player stays docked at the bottom of the screen the whole time. The aisle is built with CSS 3D
+transforms only: no WebGL, no libraries, no images.
 
 There are no audio files. Every one of the 14 tracks is composed and synthesized in the
 browser with the Web Audio API from a small recipe (tempo, key, scale, chord progression,
@@ -23,7 +28,7 @@ lead instrument), so play, pause, seek and volume control real sound.
 
 | Brief item | Where |
 | --- | --- |
-| Landing view, one primary action | Hero disc player with a single pink **Play** button |
+| Landing view, one primary action | Vinyl loading screen (one action: tap the record), then the record aisle with a single pink **Play** button |
 | 3+ playlists | 4 MiniDisc cartridges; open one or press its play button |
 | Categories with working filtering | Genre chips filter tracks, albums and artists together |
 | Album cards | 6 jewel cases with generated SVG covers |
@@ -65,8 +70,10 @@ js/app.js       interface logic: filters, search, likes, sheet, player bar
 - **Type:** Michroma for display (wide, like lettering printed on hardware), Hanken Grotesk for body.
 - **Different objects for different content:** tracks are list rows, playlists are MiniDisc cartridges,
   albums are jewel cases, artists are round chrome stickers.
-- **Motion:** one boot moment (deck drops in, disc spins up, LCD says hello). Everything after that
-  responds to an action: the disc spins while music plays, buttons squish, the like bursts.
+- **The aisle is a screen in the device:** the page stays ice and chrome; the dark 3D aisle sits inside a
+  chrome bezel like an oversized display, so the two moods do not fight.
+- **Motion:** one orchestrated moment (the loading ring, then the dive into the aisle). Everything after that
+  responds to an action: the aisle moves when you browse, the record spins while music plays, the like bursts.
 
 ## Accessibility
 
@@ -74,10 +81,16 @@ js/app.js       interface logic: filters, search, likes, sheet, player bar
 - Every control has a visible label or an `aria-label`; toggles use `aria-pressed`.
 - Visible 3px focus ring on every interactive element (indigo on light, aqua on dark surfaces).
 - Seek slider is keyboard friendly: arrows jump 5 s, Page Up/Down 15 s, Home/End.
-- Keyboard shortcuts: `/` search, `Space` play/pause (when no control is focused), `Esc` closes the sheet.
+- Keyboard shortcuts: `/` search, `Space` play/pause (when no control is focused), `Esc` closes the sheet,
+  `←` `→` move along the record aisle when it has focus.
+- The loading screen is a real button (Enter or Space works), has a visible **Skip intro** button, closes with `Esc`,
+  and keeps the page behind it out of the tab order until it is dismissed.
+- Everything in the 3D aisle has a plain equivalent: previous/next record buttons, a Play button whose label
+  names the record, and the full track list below.
 - Result counts and like confirmations are announced through live regions.
 - The detail sheet moves focus in, returns it on close, and leaves the player bar reachable.
-- `prefers-reduced-motion`: no boot animation, the disc does not spin, the spectrum shows a still pattern.
+- `prefers-reduced-motion`: the loading screen appears finished and closes instantly, the aisle changes record
+  without flying, records do not spin, the spectrum shows a still pattern.
 - Generated artwork has text alternatives where it carries meaning and is hidden where it is decorative.
 - Measured contrast (WCAG ratio): indigo on ice 14.0, secondary text on ice 7.5, pink text on ice 5.2,
   indigo on pink button 4.6 to 5.3, aqua on LCD 11.1, text on player bar 10.9 or higher.
@@ -97,13 +110,16 @@ Automated checks run in headless Chrome during the build:
 - Genre filter, liked filter, search, empty states, clear filters.
 - Like state, counter, toast and `localStorage` persistence.
 - Playlist, album and artist sheets: open, play from inside, navigate album → artist, close with Esc and backdrop, focus return.
+- Loading screen: tap, Enter, Skip and Esc all enter the site; focus lands on Play; the page behind is inert until then.
+- Record aisle: buttons, arrow keys, swipe, clicking the next record, wrap-around, like from the aisle, and the aisle
+  following the player bar's next/previous.
 - Output level of all 14 generated tracks measured in four sections each: no clipping (peaks below 0.9).
 - Touch targets: nothing interactive smaller than 40 × 28 px on a phone viewport.
 - Reduced-motion mode verified.
 
 Changes made after reviewing screenshots:
 
-- Phone hero changed to a compact layout (disc beside the LCD) so Play is visible without scrolling.
+- Hero rebuilt from a disc-player deck into the vinyl loading screen and 3D record aisle.
 - Player bar on narrow phones drops the cover thumbnail to give the title more room.
 - Toast width, MiniDisc artwork and small-phone button sizing fixed.
 - Pink text and white-on-pink text replaced with accessible alternatives.
@@ -122,4 +138,6 @@ Manual checks by the team (fill in before submitting):
   [Hanken Grotesk](https://fonts.google.com/specimen/Hanken+Grotesk), Google Fonts, SIL Open Font License.
 - Audio: Web Audio API, built into the browser. No samples or recordings.
 - Artwork: generated SVG and CSS. No external images.
+- Interaction reference: the ring loader and "fly into an aisle" browsing were inspired by Luka Skhiladze's
+  portfolio site. Nothing was copied; the vinyl, the record aisle, the code and the artwork are our own.
 - Libraries: none.
