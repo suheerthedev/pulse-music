@@ -4,150 +4,136 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>PULSE · music streaming demo</title>
-  <meta name="description" content="PULSE is a fictional Y2K-style music streaming interface. Find a track and play it: every song is synthesized live in your browser.">
-  <meta name="theme-color" content="#17153B">
+  <meta name="description" content="PULSE is a fictional music streaming platform. Dig through a 3D record library, then find a track and play it: every song is synthesized live in your browser.">
+  <meta name="theme-color" content="#0C0B24">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%2317153B'/%3E%3Ccircle cx='32' cy='32' r='22' fill='%23FF3D9A'/%3E%3Ccircle cx='32' cy='32' r='12' fill='%232CE6D6'/%3E%3Ccircle cx='32' cy='32' r='4' fill='%23DDE8F5'/%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=Michroma&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
-  <noscript><style>.intro { display: none; }</style></noscript>
+  <noscript><style>.journey { display: none; }</style></noscript>
 </head>
-<body>
-  <!-- Loading screen: one big vinyl record. Tap it to enter the record library. -->
-  <div class="intro" id="intro" role="dialog" aria-modal="true" aria-label="Welcome to PULSE">
-    <div class="intro__wedges" id="introWedges" aria-hidden="true"></div>
-    <div class="intro__rays" aria-hidden="true"></div>
-    <div class="intro__stage">
-      <button type="button" class="intro__record" id="introEnter" aria-label="Enter PULSE: open the record library">
-        <span class="intro__sheen" aria-hidden="true"></span>
-        <span class="intro__label" aria-hidden="true"><span class="intro__name">PULSE</span><span class="intro__side">SIDE A · 33⅓</span></span>
-      </button>
-      <svg class="intro__ring" viewBox="-250 -250 500 500" aria-hidden="true" focusable="false">
-        <defs>
-          <path id="introOuter" d="M0,224 A224,224 0 1,1 0.01,224"/>
-          <path id="introInner" d="M0,160 A160,160 0 1,1 0.01,160"/>
-          <mask id="introMask" maskUnits="userSpaceOnUse" x="-250" y="-250" width="500" height="500">
-            <circle class="intro__reveal" r="205" pathLength="100" transform="rotate(-90)"/>
-          </mask>
-        </defs>
-        <circle class="intro__ticks intro__ticks--base" r="205"/>
-        <circle class="intro__ticks intro__ticks--on" r="205" mask="url(#introMask)"/>
-        <g class="intro__labels" id="introLabels"></g>
-        <text class="intro__cta"><textPath href="#introInner" startOffset="50%" text-anchor="middle">TAP TO TUNE IN</textPath></text>
-      </svg>
-      <div class="intro__dot" aria-hidden="true"></div>
-    </div>
-    <p class="intro__hint" id="introHint" role="status">Loading the stacks</p>
-    <button type="button" class="intro__skip" id="introSkip">Skip intro</button>
-  </div>
-  <a class="skip" id="skipLink" href="#library">Skip to the track library</a>
+<body class="at-intro">
+  <a class="skip" href="#/home">Skip to the music library</a>
 
-  <header class="top" id="top">
-    <a class="logo" href="#top" aria-label="PULSE, back to top">
-      <span class="logo__dot" aria-hidden="true"></span>PULSE
-    </a>
-    <form class="search" role="search" id="searchForm">
-      <label class="sr-only" for="search">Search tracks, artists, albums and genres</label>
-      <svg class="search__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
-      <input id="search" type="search" placeholder="Search tracks, artists, genres" autocomplete="off" spellcheck="false" enterkeyhint="search">
-    </form>
-    <nav class="top__nav" aria-label="Sections">
-      <a href="#library">Library</a>
-      <a href="#playlists">Playlists</a>
-      <a href="#albums">Albums</a>
-      <a href="#artists">Artists</a>
-    </nav>
-  </header>
+  <!-- The scroll journey: vinyl record -> 3D record library (4 records) -> the app below.
+       Everything here is driven by scroll position, so scrolling up plays it in reverse. -->
+  <div class="journey" id="journey">
+    <div class="journey__pin" id="pin">
 
-  <main id="main">
-    <!-- Landing view: the record stacks. A 3D aisle of vinyl; one primary action: Play the record in front of you. -->
-    <section class="hero" aria-labelledby="heroTitle">
-      <div class="bezel">
-        <div class="stacks is-arriving" id="stacks">
-          <div class="stacks__scene" aria-hidden="true">
-            <div class="stacks__glow"></div>
-            <div class="stacks__origin">
-              <div class="plane ceil"><div class="plane__tex"></div></div>
-              <div class="plane floor"><div class="plane__tex"></div></div>
-              <div class="plane wall wall--l"><div class="plane__tex"></div></div>
-              <div class="plane wall wall--r"><div class="plane__tex"></div></div>
-              <div class="stacks__world" id="stacksWorld"></div>
-            </div>
-          </div>
-          <h1 id="heroTitle">Dig the stacks. <em>Drop the needle.</em></h1>
-          <div class="hud" role="group" aria-label="Record library">
-            <p class="hud__title" id="hudTitle" aria-live="polite"></p>
-            <p class="hud__meta" id="hudMeta"></p>
-            <div class="hud__controls">
-              <button type="button" class="bubble bubble--round" data-action="browse-prev" aria-label="Previous record">
-                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><g transform="translate(24 0) scale(-1 1)"><path d="M5 5.8v12.4a.9.9 0 0 0 1.4.75l8.9-6.2a.9.9 0 0 0 0-1.5L6.4 5.05A.9.9 0 0 0 5 5.8z"/><rect x="17" y="5" width="2.6" height="14" rx="1.3"/></g></svg>
-              </button>
-              <button type="button" class="bubble bubble--pink hud__play" data-action="play-browse" id="heroPlay">
-                <span id="heroPlayIcon" aria-hidden="true"></span><span id="heroPlayText">Play</span>
-              </button>
-              <button type="button" class="bubble bubble--round" data-action="browse-next" aria-label="Next record">
-                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 5.8v12.4a.9.9 0 0 0 1.4.75l8.9-6.2a.9.9 0 0 0 0-1.5L6.4 5.05A.9.9 0 0 0 5 5.8z"/><rect x="17" y="5" width="2.6" height="14" rx="1.3"/></svg>
-              </button>
-              <span id="hudLike"></span>
-            </div>
-            <div class="hud__ticks" id="hudTicks" aria-hidden="true"></div>
-          </div>
-          <canvas id="viz" width="640" height="14" aria-hidden="true"></canvas>
+      <section class="aisle" id="aisle" aria-labelledby="aisleTitle">
+        <div class="aisle__scene" aria-hidden="true">
+          <div class="aisle__glow"></div>
+          <div class="aisle__origin"><div class="aisle__env" id="aisleEnv"></div></div>
+          <div class="aisle__fog"></div>
+          <div class="aisle__origin"><div class="aisle__world" id="aisleWorld"></div></div>
         </div>
+        <div class="aisle__top">
+          <span class="logo"><span class="logo__dot" aria-hidden="true"></span>PULSE</span>
+          <a class="aisle__skip" href="#/home">Enter the app</a>
+        </div>
+        <h1 id="aisleTitle">Dig the stacks. <em>Drop the needle.</em></h1>
+        <div class="hud" role="group" aria-label="Record library">
+          <p class="hud__title" id="hudTitle" aria-live="polite"></p>
+          <p class="hud__meta" id="hudMeta"></p>
+          <div class="hud__controls">
+            <button type="button" class="bubble bubble--round" data-action="browse-prev" id="hudPrev" aria-label="Previous record">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><g transform="translate(24 0) scale(-1 1)"><path d="M5 5.8v12.4a.9.9 0 0 0 1.4.75l8.9-6.2a.9.9 0 0 0 0-1.5L6.4 5.05A.9.9 0 0 0 5 5.8z"/><rect x="17" y="5" width="2.6" height="14" rx="1.3"/></g></svg>
+            </button>
+            <button type="button" class="bubble bubble--pink hud__play" data-action="play-browse" id="heroPlay">
+              <span id="heroPlayIcon" aria-hidden="true"></span><span id="heroPlayText">Play</span>
+            </button>
+            <button type="button" class="bubble bubble--round" data-action="browse-next" id="hudNext" aria-label="Next record">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 5.8v12.4a.9.9 0 0 0 1.4.75l8.9-6.2a.9.9 0 0 0 0-1.5L6.4 5.05A.9.9 0 0 0 5 5.8z"/><rect x="17" y="5" width="2.6" height="14" rx="1.3"/></svg>
+            </button>
+            <span id="hudLike"></span>
+          </div>
+          <div class="hud__ticks" id="hudTicks" aria-hidden="true"></div>
+          <p class="hud__hint" id="hudHint">Scroll or swipe to flip through the records</p>
+        </div>
+        <canvas class="viz viz--strip" data-cols="48" data-rows="3" width="640" height="12" aria-hidden="true"></canvas>
+      </section>
+
+      <div class="intro" id="intro">
+        <div class="intro__wedges" id="introWedges" aria-hidden="true"></div>
+        <div class="intro__rays" id="introRays" aria-hidden="true"></div>
+        <div class="intro__stage" id="introStage">
+          <button type="button" class="intro__record" id="introEnter" data-action="enter" aria-label="Enter PULSE: open the record library">
+            <span class="intro__sheen" aria-hidden="true"></span>
+            <span class="intro__label" aria-hidden="true"><span class="intro__name">PULSE</span><span class="intro__side">SIDE A · 33⅓</span></span>
+          </button>
+          <svg class="intro__ring" viewBox="-250 -250 500 500" aria-hidden="true" focusable="false">
+            <defs>
+              <path id="introOuter" d="M0,224 A224,224 0 1,1 0.01,224"/>
+              <path id="introInner" d="M0,160 A160,160 0 1,1 0.01,160"/>
+              <mask id="introMask" maskUnits="userSpaceOnUse" x="-250" y="-250" width="500" height="500">
+                <circle class="intro__reveal" r="205" pathLength="100" transform="rotate(-90)"/>
+              </mask>
+            </defs>
+            <circle class="intro__ticks intro__ticks--base" r="205"/>
+            <circle class="intro__ticks intro__ticks--on" r="205" mask="url(#introMask)"/>
+            <g class="intro__labels" id="introLabels"></g>
+            <text class="intro__cta"><textPath href="#introInner" startOffset="50%" text-anchor="middle">TAP TO TUNE IN</textPath></text>
+          </svg>
+          <div class="intro__dot" aria-hidden="true"></div>
+        </div>
+        <p class="intro__hint" id="introHint" role="status">Loading the stacks</p>
+        <a class="intro__skip" id="introSkip" href="#/home">Skip to the app</a>
       </div>
 
-      <div class="hero__copy">
-        <p class="hero__lede">PULSE is a record library for tracks you have not heard yet. Flip through the stacks with a swipe or the arrow keys, or search by artist, mood or genre.</p>
-        <p class="hero__note"><strong>Demo project.</strong> Every artist, album and track here is fictional, and the music is synthesized live in your browser.</p>
-        <a class="hero__more" href="#library">Browse the full list</a>
+    </div>
+  </div>
+
+  <!-- The app -->
+  <div class="app" id="app">
+    <aside class="side" id="side" aria-label="Sidebar">
+      <div class="panel side__top">
+        <a class="logo" href="#/home" aria-label="PULSE home"><span class="logo__dot" aria-hidden="true"></span>PULSE</a>
+        <nav class="side__nav" aria-label="Main">
+          <a href="#/home" data-nav="home"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 11.2 12 4l8 7.2V20h-5.2v-5.4H9.2V20H4z"/></svg>Home</a>
+          <a href="#/search" data-nav="search"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>Search</a>
+          <a href="#/library" data-nav="library"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 4v16M10 4v16M14.5 5.2l4.6 14.4"/></svg>Your Library</a>
+        </nav>
       </div>
-    </section>
-
-    <section class="section" id="library" aria-labelledby="libraryTitle">
-      <div class="section__head">
-        <h2 id="libraryTitle">Find a track</h2>
-        <p class="count" id="resultCount" role="status" aria-live="polite"></p>
-        <button type="button" class="textbtn" id="clearFilters" data-action="clear" hidden>Clear filters</button>
+      <div class="panel side__lib">
+        <h2 class="side__h">Your Library</h2>
+        <ul class="side__list" id="sideList"></ul>
+        <button type="button" class="side__stacks" data-action="to-stacks">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg>Back to the record stacks
+        </button>
       </div>
-      <div class="chips" id="chips" role="group" aria-label="Filter by genre"></div>
-      <ul class="tracks glass" id="trackList" aria-label="Tracks"></ul>
-      <div class="empty glass" id="trackEmpty" hidden></div>
-    </section>
+    </aside>
 
-    <section class="section" id="playlists" aria-labelledby="playlistsTitle">
-      <div class="section__head">
-        <h2 id="playlistsTitle">Playlists</h2>
-        <p class="count">Mixes on MiniDisc. Open one or press play.</p>
-      </div>
-      <div class="shelf shelf--md" id="playlistGrid"></div>
-    </section>
+    <div class="main" id="mainCol">
+      <header class="bar" id="top">
+        <a class="logo bar__logo" href="#/home" aria-label="PULSE home"><span class="logo__dot" aria-hidden="true"></span>PULSE</a>
+        <div class="bar__hist">
+          <button type="button" class="iconbtn" data-action="back" aria-label="Go back"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg></button>
+          <button type="button" class="iconbtn" data-action="forward" aria-label="Go forward"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg></button>
+        </div>
+        <form class="search" role="search" id="searchForm">
+          <label class="sr-only" for="search">Search tracks, artists, albums and genres</label>
+          <svg class="search__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>
+          <input id="search" type="search" placeholder="What do you want to play?" autocomplete="off" spellcheck="false" enterkeyhint="search">
+        </form>
+        <span class="bar__demo">Demo · fictional music</span>
+        <nav class="tabs" aria-label="Main">
+          <a href="#/home" data-nav="home">Home</a>
+          <a href="#/search" data-nav="search">Search</a>
+          <a href="#/library" data-nav="library">Library</a>
+        </nav>
+      </header>
 
-    <section class="section" id="albums" aria-labelledby="albumsTitle">
-      <div class="section__head">
-        <h2 id="albumsTitle">Albums</h2>
-        <p class="count" id="albumCount"></p>
-      </div>
-      <div class="shelf shelf--case" id="albumGrid"></div>
-    </section>
+      <main class="view" id="view" tabindex="-1"></main>
 
-    <section class="section" id="artists" aria-labelledby="artistsTitle">
-      <div class="section__head">
-        <h2 id="artistsTitle">Artists</h2>
-        <p class="count" id="artistCount"></p>
-      </div>
-      <div class="shelf shelf--artist" id="artistGrid"></div>
-    </section>
-  </main>
+      <footer class="foot" id="foot">
+        <p><strong>PULSE</strong> is a student competition project (Brief #3: Music Streaming Interface). All artists, albums, tracks, places and listener counts are fictional sample data.</p>
+        <p>No audio files are used: songs are generated with the Web Audio API. Cover art is generated SVG. Fonts: Michroma and Hanken Grotesk from Google Fonts.</p>
+      </footer>
+    </div>
 
-  <footer class="foot" id="foot">
-    <p><strong>PULSE</strong> is a student competition project (Brief #3: Music Streaming Interface). All artists, albums, tracks, places and listener counts are fictional sample data.</p>
-    <p>No audio files are used: songs are generated with the Web Audio API. Cover art is generated SVG. Fonts: Michroma and Hanken Grotesk from Google Fonts.</p>
-  </footer>
-
-  <!-- Detail sheet for playlists, albums and artist profiles. Non-modal on purpose so the player bar stays usable. -->
-  <div class="backdrop" id="backdrop" hidden></div>
-  <dialog class="sheet" id="sheet" aria-labelledby="sheetTitle"></dialog>
+    <aside class="now" id="nowPanel" aria-label="Now playing"></aside>
+  </div>
 
   <!-- Persistent player bar -->
   <section class="player" id="player" aria-label="Music player">
@@ -155,7 +141,7 @@
       <div class="player__art" id="pArt"></div>
       <div class="player__text">
         <p class="player__title" id="pTitle">Nothing loaded</p>
-        <button type="button" class="player__artist" id="pArtist" data-action="open-artist"></button>
+        <a class="player__artist" id="pArtist" href="#/home"></a>
       </div>
       <span id="pLike"></span>
     </div>
