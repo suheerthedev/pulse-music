@@ -466,8 +466,10 @@ svg { display: block; }
 }
 .sc__sleeve::after { content: ""; position: absolute; inset: 0; background: linear-gradient(120deg, rgba(255, 255, 255, .32) 0 14%, transparent 14.5% 72%, rgba(255, 255, 255, .12) 72.5% 84%, transparent 84.5%); }
 /* Pull a record out: the sleeve lifts and the vinyl slides up out of it */
-.sc:hover .sc__in, .sc:focus-visible .sc__in, .sc.is-current .sc__in { transform: translateY(-32%); }
-.sc:hover .sc__vinyl, .sc:focus-visible .sc__vinyl, .sc.is-current .sc__vinyl { transform: translateY(-48%); }
+.sc:hover .sc__in, .sc:focus-visible .sc__in { transform: translateY(-32%); }
+.sc:hover .sc__vinyl, .sc:focus-visible .sc__vinyl { transform: translateY(-48%); }
+/* The record that is playing stays in the row; it just glows */
+.sc.is-spinning .sc__sleeve { box-shadow: 0 0 0 3px var(--pink), 0 0 34px 6px rgba(255, 61, 154, .75), -22px 12px 34px rgba(0, 0, 0, .6); }
 .sc:focus-visible { outline: none; }
 .sc:focus-visible .sc__sleeve { box-shadow: 0 0 0 4px var(--aqua), -22px 12px 34px rgba(0, 0, 0, .6); }
 .stack__hint { position: absolute; z-index: 2; left: 18px; bottom: 20px; max-width: min(46ch, 52%); font-size: .9375rem; color: var(--ice); text-shadow: 0 2px 10px #05040F; }
