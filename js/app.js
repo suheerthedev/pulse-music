@@ -23,6 +23,11 @@
   const TRACK = index(D.tracks), ARTIST = index(D.artists), ALBUM = index(D.albums),
     GENRE = index(D.genres), PLAYLIST = index(D.playlists);
   D.albums.forEach(function (a) { a.genre = ARTIST[a.artist].genre; });
+  const lum = function (hex) {
+    const c = [1, 3, 5].map(function (i) { const v = parseInt(hex.slice(i, i + 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  };
+  const inkOn = function (hex) { return lum(hex) > 0.2 ? '#17153B' : '#FFFFFF'; };
   const GENRE_TINT = { hyperpop: '#FF3D9A', synthwave: '#B7A6FF', lofi: '#DDE8F5', dnb: '#2CE6D6', ambient: '#A9B7C9', house: '#FF9CCB' };
 
   const reduceMotion = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
@@ -248,7 +253,8 @@
     pTitle: $('#pTitle'), pArtist: $('#pArtist'), pArt: $('#pArt'), pLike: $('#pLike'), pPlay: $('#pPlay'),
     side: $('#sideList'), now: $('#nowPanel'),
     journey: $('#journey'), pin: $('#pin'), intro: $('#intro'), stage: $('#introStage'), wedges: $('#introWedges'), rays: $('#introRays'),
-    introHint: $('#introHint'), introSkip: $('#introSkip'),
+    ring: $('.intro__ring'), dot: $('.intro__dot'), introHint: $('#introHint'), grooves: $('#grooves'), groovesPlane: $('#groovesPlane'), mag: $('#mag'), magNum: $('#magNum'),
+    stack: $('#stack'), stackRow: $('#stackRow'), stackCap: $('#stackCap'), stackHint: $('#stackHint'),
     aisle: $('#aisle'), env: $('#aisleEnv'), world: $('#aisleWorld'),
     heroPlay: $('#heroPlay'), hudTitle: $('#hudTitle'), hudMeta: $('#hudMeta'), hudLike: $('#hudLike'), hudTicks: $('#hudTicks'),
     hudPrev: $('#hudPrev'), hudNext: $('#hudNext'), hudHint: $('#hudHint')
@@ -269,7 +275,8 @@
       const quick = [{ href: '#/liked', art: heartArt(), name: 'Liked Songs', ctx: 'liked' }]
         .concat(D.playlists.map(function (p) { return { href: '#/playlist/' + p.id, art: mdArt(p), name: p.title, ctx: 'playlist:' + p.id }; }))
         .concat([{ href: '#/album/' + pick.id, art: coverArt(pick), name: pick.title, ctx: 'album:' + pick.id }]);
-      return '<section><h2 id="viewTitle">' + hello + '</h2><div class="quick">' + quick.map(function (q) {
+      return '<section class="home-deck" data-slot="deck"></section>' +
+      '<section><h2 id="viewTitle">' + hello + '. What goes on the platter?</h2><div class="quick">' + quick.map(function (q) {
         return '<div class="qt"><a class="qt__link" href="' + q.href + '"><span class="qt__art">' + q.art + '</span><span class="qt__name">' + esc(q.name) + '</span></a>' +
           playBtn(q.ctx, q.name, 'bubble--sm qt__play') + '</div>';
       }).join('') + '</div></section>' +
@@ -280,11 +287,11 @@
         '<div class="feature__actions"><button type="button" class="bubble bubble--pink" data-action="play-list" data-ctx="album:' + pick.id + '">' + ICON.play + '<span>Play album</span></button>' +
         '<a class="ghost" href="#/album/' + pick.id + '">Open album</a></div></div></section>' +
 
-      section('Made for late nights', row(D.playlists.map(playlistCard)), ['#/library', 'Show all']) +
-      section('Fresh off the press', row(D.albums.map(albumCard)), ['#/library', 'Show all']) +
+      section('Mixtapes for late nights', row(D.playlists.map(playlistCard)), ['#/library', 'Open the crate']) +
+      section('Fresh off the press', row(D.albums.map(albumCard)), ['#/library', 'Open the crate']) +
       section('Browse by genre', genreTiles()) +
-      section('Popular artists', row(D.artists.map(artistCard))) +
-      section('Trending tracks', trackList(D.featured.slice(0, 8), 'all', 'Trending tracks'), ['#/search', 'See every track']);
+      section('Artists on the wall', row(D.artists.map(artistCard))) +
+      section('Heavy rotation', trackList(D.featured.slice(0, 8), 'all', 'Heavy rotation'), ['#/search', 'See every track']);
     },
 
     search: function () {
@@ -308,7 +315,7 @@
 
     library: function () {
       const n = state.liked.size;
-      return '<section><h2 id="viewTitle">Your Library</h2></section>' +
+      return '<section><h2 id="viewTitle">Your crate</h2><p class="muted">Everything you can pull off the shelf.</p></section>' +
         section('Playlists', '<div class="grid">' +
           card({ href: '#/liked', art: heartArt(), title: 'Liked Songs', sub: plural(n, 'liked track'), ctx: n ? 'liked' : '' }) +
           D.playlists.map(playlistCard).join('') + '</div>') +
@@ -372,7 +379,7 @@
     if (name === 'search' || name === 'library' || name === 'liked') return { name: name };
     return { name: 'home' };
   }
-  const TITLES = { home: 'Home', search: 'Search', library: 'Your Library', liked: 'Liked Songs' };
+  const TITLES = { home: 'Home', search: 'Search', library: 'Your Crate', liked: 'Liked Songs' };
 
   function render() {
     const r = state.route, active = document.activeElement;
@@ -382,6 +389,9 @@
     const navKey = r.name === 'liked' || r.name === 'playlist' || r.name === 'album' || r.name === 'artist' ? 'library' : r.name;
     $$('[data-nav]').forEach(function (a) { if (a.dataset.nav === navKey) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
     $$('a', el.side).forEach(function (a) { if (a.getAttribute('href') === location.hash) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+    const t = TRACK[state.currentId];
+    if (t) $$('[data-slot="deck"]', el.view).forEach(function (slot) { slot.innerHTML = deckHTML(t); });
+    findCanvases();
     syncTracks();
     setTitle();
   }
@@ -409,17 +419,25 @@
   window.addEventListener('hashchange', function () { onRoute(true); });
 
   /* ---------- Sidebar + now playing ---------- */
+  /* The crate: every playlist and album as a record spine you can pull out */
   function renderSide() {
-    el.side.innerHTML = '<li><a href="#/liked"><span class="side__art">' + heartArt() + '</span><span><span class="side__name">Liked Songs</span>' +
-      '<span class="side__sub">Playlist · <span class="side__count" id="sideCount">' + plural(state.liked.size, 'track') + '</span></span></span></a></li>' +
-      D.playlists.map(function (p) {
-        return '<li><a href="#/playlist/' + p.id + '"><span class="side__art">' + mdArt(p) + '</span><span><span class="side__name">' + esc(p.title) + '</span>' +
-          '<span class="side__sub">Playlist · ' + plural(p.tracks.length, 'track') + '</span></span></a></li>';
-      }).join('') +
-      D.albums.map(function (al) {
-        return '<li><a href="#/album/' + al.id + '"><span class="side__art">' + coverArt(al) + '</span><span><span class="side__name">' + esc(al.title) + '</span>' +
-          '<span class="side__sub">Album · ' + esc(ARTIST[al.artist].name) + '</span></span></a></li>';
-      }).join('');
+    const spine = function (href, name, sub, color, extra) {
+      return '<li><a class="spine" href="' + href + '" style="--c:' + color + ';--ink:' + inkOn(color) + '"><span class="spine__name">' + esc(name) + '</span><span class="spine__sub"' + (extra || '') + '>' + esc(sub) + '</span></a></li>';
+    };
+    el.side.innerHTML = spine('#/liked', 'Liked Songs', plural(state.liked.size, 'track'), '#FF3D9A', ' id="sideCount"') +
+      D.playlists.map(function (p) { return spine('#/playlist/' + p.id, p.title, 'Mix · ' + p.tracks.length, p.tint); }).join('') +
+      D.albums.map(function (al) { return spine('#/album/' + al.id, al.title, 'LP · ' + al.year, al.colors[0]); }).join('');
+  }
+
+  /* The turntable: record spins and the tonearm drops while music plays */
+  function deckHTML(t) {
+    const a = ARTIST[t.artist], al = ALBUM[t.album];
+    return '<div class="deck"><div class="deck__head"><h2 class="now__h">On the platter</h2><span class="deck__rpm" aria-hidden="true">33⅓ RPM</span></div>' +
+      '<div class="tt"><div class="tt__platter"><div class="tt__rec"><div class="tt__lbl">' + coverArt(al, 'Cover of ' + al.title + ': ' + al.artDesc) + '</div></div></div>' +
+      '<div class="tt__arm" aria-hidden="true"><i></i></div><span class="tt__knob" aria-hidden="true"></span><span class="tt__knob tt__knob--b" aria-hidden="true"></span></div>' +
+      '<div class="now__row"><div style="flex:1;min-width:0"><p class="now__title">' + esc(t.title) + '</p><a class="now__artist" href="#/artist/' + a.id + '">' + esc(a.name) + '</a></div>' +
+      '<button type="button" class="bubble bubble--pink bubble--round" data-action="toggle" aria-label="Play or pause ' + esc(t.title) + '"><span class="js-play-icon" aria-hidden="true">' + (Engine.isPlaying() ? ICON.pause : ICON.play) + '</span></button>' + likeBtn(t) + '</div>' +
+      '<div class="lcd"><canvas class="viz" data-cols="24" data-rows="6" width="280" height="52" aria-hidden="true"></canvas><p>' + t.bpm + ' BPM · ' + esc(t.keyName) + ' · ' + esc(t.leadName) + '</p></div></div>';
   }
 
   function renderNow() {
@@ -428,14 +446,11 @@
     const a = ARTIST[t.artist], al = ALBUM[t.album];
     const q = state.queue, at = q.indexOf(t.id), next = [];
     for (let k = 1; k <= Math.min(3, q.length - 1); k++) next.push(TRACK[q[(at + k + q.length) % q.length]]);
-    el.now.innerHTML = '<div class="now__in"><h2 class="now__h">Now playing</h2>' +
-      '<div class="now__art"><div class="now__disc"><div class="now__spin"><div class="now__lbl">' + coverArt(al) + '</div></div></div>' +
-      '<div class="now__cover">' + coverArt(al, 'Cover of ' + al.title + ': ' + al.artDesc) + '</div></div>' +
-      '<div class="now__row"><div style="flex:1;min-width:0"><p class="now__title">' + esc(t.title) + '</p><a class="now__artist" href="#/artist/' + a.id + '">' + esc(a.name) + '</a></div>' + likeBtn(t) + '</div>' +
-      '<div class="lcd"><canvas class="viz" data-cols="24" data-rows="6" width="280" height="52" aria-hidden="true"></canvas><p>' + t.bpm + ' BPM · ' + esc(t.keyName) + ' · ' + esc(t.leadName) + '</p></div>' +
+    $$('[data-slot="deck"]').forEach(function (slot) { slot.innerHTML = deckHTML(t); });
+    el.now.innerHTML = '<div class="now__in">' + deckHTML(t) +
       '<div class="now__card"><h3>About the artist</h3><a class="now__who" href="#/artist/' + a.id + '"><span>' + avatar(a) + '</span><span>' + esc(a.name) + '</span></a>' +
       '<p>' + esc(a.bio) + '</p><p class="muted">' + esc(a.listeners) + ' monthly listeners (fictional)</p></div>' +
-      (next.length ? '<div class="now__card"><h3>Next in queue</h3><div class="queue">' + next.map(function (n) {
+      (next.length ? '<div class="now__card"><h3>Up next on the stack</h3><div class="queue">' + next.map(function (n) {
         return '<button type="button" data-action="play-track" data-id="' + n.id + '" data-ctx="queue" aria-label="Play ' + esc(n.title) + ' by ' + esc(ARTIST[n.artist].name) + '">' +
           '<span class="queue__art">' + coverArt(ALBUM[n.album]) + '</span><span><span class="queue__t">' + esc(n.title) + '</span><span class="queue__a">' + esc(ARTIST[n.artist].name) + '</span></span></button>';
       }).join('') + '</div></div>' : '') + '</div>';
@@ -453,6 +468,13 @@
       $('.track__main', li).setAttribute('aria-label', (on ? 'Pause ' : 'Play ') + t.title + ' by ' + ARTIST[t.artist].name);
       $('.track__state', li).innerHTML = on ? ICON.eq : ICON.play;
     });
+    $$('.sc').forEach(function (c) {
+      const cur = c.dataset.id === state.currentId;
+      c.classList.toggle('is-current', cur);
+      c.classList.toggle('is-spinning', cur && playing);
+      c.setAttribute('aria-label', (cur && playing ? 'Pause ' : 'Play ') + c.dataset.title);
+    });
+    if (el.stackCap && J.capDefault) J.capDefault();
   }
 
   function syncPlayButtons() {
@@ -648,7 +670,7 @@
     const n = state.liked.size;
     $$('.chip__count').forEach(function (c) { c.textContent = String(n); c.classList.remove('bump'); void c.offsetWidth; c.classList.add('bump'); });
     const sc = $('#sideCount');
-    if (sc) { sc.textContent = plural(n, 'track'); sc.classList.remove('bump'); void sc.offsetWidth; sc.classList.add('bump'); }
+    if (sc) sc.textContent = plural(n, 'track');
     toast(liked ? 'Added “' + t.title + '” to Liked Songs · ' + plural(n, 'track') : 'Removed “' + t.title + '” from Liked Songs');
     // Views that list liked tracks need a refresh; keep keyboard focus somewhere sensible
     const name = state.route.name, inView = btn && el.view.contains(btn);
@@ -695,9 +717,10 @@
   /* =====================================================================
      SCROLL JOURNEY: vinyl -> record library -> app
      ===================================================================== */
-  const AISLE = D.featured.slice(0, 4);   // the four records in the library
+  const AISLE = D.featured.slice(0, 2);   // the two records hanging in the aisle
+  const STACK_STOPS = 3;                  // scroll stops along the whole-collection row
   const BAYS = 9;
-  const J = { vh: 0, lead: 0, unit: 0, stops: [], end: 0, gap: 520, front: -1, atIntro: null, raf: 0, recs: [], bays: [], w: 0, ready: false };
+  const J = { vh: 0, lead: 0, unit: 0, stops: [], end: 0, gap: 520, front: -1, zone: '', inJ: null, raf: 0, recs: [], bays: [], w: 0, card: 200, capDefault: null };
   const recPos = function (i) { return i % 2 ? { x: 0.34, y: -0.08 } : { x: -0.34, y: 0.05 }; };
 
   function buildAisle() {
@@ -730,6 +753,23 @@
     J.recs = $$('.rec', el.world);
     el.hudTicks.innerHTML = AISLE.map(function () { return '<i></i>'; }).join('');
 
+    // The whole collection as a diagonal row of sleeves
+    el.stackRow.innerHTML = D.featured.map(function (id, i) {
+      const t = TRACK[id], al = ALBUM[t.album], name = t.title + ' by ' + ARTIST[t.artist].name;
+      return '<button type="button" class="sc" style="--i:' + i + '" data-action="play-track" data-id="' + id + '" data-ctx="all" data-title="' + esc(name) + '" aria-label="Play ' + esc(name) + '">' +
+        '<span class="sc__in"><span class="sc__vinyl"><span class="sc__lbl">' + coverArt(al) + '</span></span>' +
+        '<span class="sc__sleeve">' + coverArt(al) + '<span class="rec__sticker">' + esc(t.title) + '</span></span></span></button>';
+    }).join('');
+    const cap = function (id) {
+      const t = TRACK[id];
+      el.stackCap.innerHTML = t ? '<b>' + esc(t.title) + '</b><span>' + esc(ARTIST[t.artist].name) + ' · ' + esc(GENRE[t.genre].name) + (id === state.currentId && Engine.isPlaying() ? ' · playing' : '') + '</span>' : '';
+    };
+    J.capDefault = function () { const h = $('.sc:hover', el.stackRow) || (document.activeElement && document.activeElement.classList.contains('sc') ? document.activeElement : null); cap(h ? h.dataset.id : (Engine.isPlaying() ? state.currentId : '')); };
+    el.stackRow.addEventListener('mouseover', function (e) { const c = e.target.closest('.sc'); if (c) cap(c.dataset.id); });
+    el.stackRow.addEventListener('focusin', function (e) { const c = e.target.closest('.sc'); if (c) cap(c.dataset.id); });
+    el.stackRow.addEventListener('mouseleave', function () { J.capDefault(); });
+    if (window.matchMedia && window.matchMedia('(hover: none)').matches) el.stackHint.textContent = 'Tap a record to pull it out and play it. Swipe for more.';
+
     // Loading screen dressing
     const labels = ['HYPERPOP', 'SYNTHWAVE', 'LO-FI', 'DRUM & BASS', 'AMBIENT', 'HOUSE', 'PLAYLISTS', 'ALBUMS', 'ARTISTS', 'LIKES'];
     el.wedges.innerHTML = D.albums.map(function (al, i) {
@@ -756,12 +796,14 @@
     J.lead = Math.round(vh * 0.85);
     J.unit = Math.round(vh * 0.6);
     J.stops = [0];
-    AISLE.forEach(function (id, i) { J.stops.push(J.lead + i * J.unit); });
+    for (let i = 0; i < AISLE.length + STACK_STOPS; i++) J.stops.push(J.lead + i * J.unit);
     J.end = J.stops[J.stops.length - 1];
     el.journey.style.height = (J.end + vh) + 'px';
     const rec = J.recs[0] ? J.recs[0].offsetWidth : 0;
     J.gap = Math.round((rec || 240) * 2.1);
     el.aisle.style.setProperty('--gap', J.gap + 'px');
+    const card = $('.sc', el.stackRow);
+    J.card = card ? card.offsetWidth : 200;
     J.front = -1;
     updateJourney();
   }
@@ -775,8 +817,8 @@
     el.hudMeta.textContent = ARTIST[t.artist].name + ' · ' + GENRE[t.genre].name + ' · ' + t.bpm + ' BPM';
     el.hudLike.innerHTML = likeBtn(t);
     el.hudPrev.setAttribute('aria-label', i === 0 ? 'Back to the opening record' : 'Previous record');
-    el.hudNext.setAttribute('aria-label', i === last ? 'Enter the app' : 'Next record');
-    el.hudHint.textContent = i === last ? 'Last record. Keep scrolling to enter the app' : 'Scroll or swipe to flip through the records';
+    el.hudNext.setAttribute('aria-label', i === last ? 'Show the whole collection' : 'Next record');
+    el.hudHint.textContent = i === last ? 'Keep scrolling for the whole collection' : 'Scroll or swipe to flip through the records';
     syncAisle();
   }
 
@@ -794,52 +836,77 @@
   function updateJourney() {
     J.raf = 0;
     const y = window.pageYOffset || 0, reduce = reduceMotion.matches, last = AISLE.length - 1;
+    const inJ = y < appTop() - J.vh * 0.45;
+    if (inJ !== J.inJ) { J.inJ = inJ; document.body.classList.toggle('in-journey', inJ); el.player.inert = inJ; }
     if (y > J.end + J.vh * 1.15) return;   // deep in the app: nothing to draw
     let p = clamp(y / J.lead, 0, 1), q = clamp((y - J.lead) / J.unit, 0, last);
-    if (reduce) { p = p < 0.5 ? 0 : 1; q = Math.round(q); }
-    const e = smooth(0, 1, p);
+    let s = clamp((y - J.stops[AISLE.length]) / J.unit, 0, 1);                       // camera swing to the side view
+    let t = clamp((y - J.stops[AISLE.length + 1]) / J.unit, 0, STACK_STOPS - 1);     // travel along the row
+    if (reduce) { p = p < 0.5 ? 0 : 1; q = Math.round(q); s = s < 0.5 ? 0 : 1; t = Math.round(t); }
 
-    // Loading screen: the record dives into the vanishing point
+    // 1. Vinyl: tilt back and zoom into the grooves until they become a road to the horizon
     const gone = p >= 0.995;
     el.intro.style.visibility = gone ? 'hidden' : 'visible';
     if (!gone) {
-      el.intro.style.opacity = String(1 - smooth(0.5, 0.92, p));
-      el.stage.style.transform = reduce || p === 0 ? '' : 'translateY(' + n1(-7 * e) + 'vh) scale(' + (1 - 0.97 * e).toFixed(4) + ') rotate(' + n1(260 * e) + 'deg)';
-      el.wedges.style.opacity = String(1 - smooth(0, 0.35, p));
-      el.rays.style.opacity = reduce ? '0' : String(n1(Math.sin(Math.PI * p) * 8) / 10);
-      el.rays.style.transform = 'scale(' + (0.7 + p).toFixed(3) + ')';
-      el.introHint.style.opacity = el.introSkip.style.opacity = String(1 - smooth(0, 0.18, p));
+      const tilt = 64 * smooth(0, 0.4, p), zoom = 1 + 30 * Math.pow(smooth(0.06, 0.78, p), 2.3);
+      el.intro.style.opacity = String(1 - smooth(0.8, 0.97, p));
+      el.stage.style.transform = reduce || p === 0 ? '' : 'perspective(1000px) rotateX(' + n1(tilt) + 'deg) scale(' + zoom.toFixed(3) + ')';
+      el.stage.style.opacity = String(1 - smooth(0.52, 0.72, p));
+      el.wedges.style.opacity = String(1 - smooth(0, 0.22, p));
+      el.ring.style.opacity = el.dot.style.opacity = String(1 - smooth(0.02, 0.2, p));
+      el.rays.style.opacity = '0';
+      el.grooves.style.opacity = String(smooth(0.42, 0.66, p));
+      el.groovesPlane.style.backgroundPosition = '0 0, ' + n1(p * 90) + 'px 0, 0 ' + n1(p * 900) + 'px';
+      el.introHint.style.opacity = String(1 - smooth(0, 0.12, p));
+      const mag = Math.pow(355, smooth(0.04, 0.8, p));
+      el.magNum.textContent = '×' + (mag < 10 ? mag.toFixed(1) : String(Math.round(mag)));
+      el.mag.style.opacity = String(smooth(0.03, 0.1, p) * (1 - smooth(0.82, 0.95, p)));
     }
 
-    // Record library: fly in, then move one bay per record
-    el.aisle.style.opacity = String(smooth(0.3, 0.8, p));
-    const travel = q * J.gap - (reduce ? 0 : Math.pow(1 - p, 2) * J.gap * 5);
-    const i0 = Math.floor(q), f = q - i0, a = recPos(i0), b = recPos(Math.min(i0 + 1, last));
-    const cx = a.x + (b.x - a.x) * f, cy = a.y + (b.y - a.y) * f;
-    const tf = 'translate3d(calc(var(--rec) * ' + (-cx).toFixed(4) + '), calc(var(--rec) * ' + (-cy).toFixed(4) + '), ' + n1(travel) + 'px)';
-    el.env.style.transform = tf;
-    el.world.style.transform = tf;
-    J.bays.forEach(function (bay, j) {
-      const near = J.gap - j * J.gap + travel;            // z of the bay's near edge
-      bay.style.visibility = (near - J.gap > J.gap * 1.2 || near < -J.gap * 5.6) ? 'hidden' : 'visible';
-      bay.style.setProperty('--n', (near / J.gap).toFixed(3));
-    });
-    J.recs.forEach(function (r, k) {
-      const d = k - q;
-      const op = d >= 0 ? Math.max(0.16, 1 - 0.36 * d) : clamp(1 + d * 2.4, 0, 1);
-      r.style.opacity = op.toFixed(3);
-      r.style.pointerEvents = d > -0.3 && d < 1.5 ? 'auto' : 'none';
-    });
+    // 2. Aisle: fly in, then move one bay per record. It fades as the camera swings away.
+    const es = smooth(0, 1, s);
+    const aisleOn = p > 0.6 && s < 0.98;
+    el.aisle.style.visibility = aisleOn ? 'visible' : 'hidden';
+    if (aisleOn) {
+      el.aisle.style.opacity = String(smooth(0.72, 0.96, p) * (1 - smooth(0.05, 0.6, s)));
+      const travel = q * J.gap - (reduce ? 0 : Math.pow(1 - p, 2) * J.gap * 3) + es * J.gap * 0.5;
+      const i0 = Math.floor(q), f = q - i0, a = recPos(i0), b = recPos(Math.min(i0 + 1, last));
+      const cx = a.x + (b.x - a.x) * f, cy = a.y + (b.y - a.y) * f;
+      const tf = 'translate3d(calc(var(--rec) * ' + (-cx).toFixed(4) + '), calc(var(--rec) * ' + (-cy).toFixed(4) + '), ' + n1(travel) + 'px)';
+      el.env.style.transform = tf;
+      el.world.style.transform = tf;
+      J.bays.forEach(function (bay, j) {
+        const near = J.gap - j * J.gap + travel;            // z of the bay's near edge
+        bay.style.visibility = (near - J.gap > J.gap * 1.2 || near < -J.gap * 5.6) ? 'hidden' : 'visible';
+        bay.style.setProperty('--n', (near / J.gap).toFixed(3));
+      });
+      J.recs.forEach(function (r, k) {
+        const d = k - q;
+        r.style.opacity = (d >= 0 ? Math.max(0.16, 1 - 0.36 * d) : clamp(1 + d * 2.4, 0, 1)).toFixed(3);
+        r.style.pointerEvents = d > -0.3 && d < 1.5 ? 'auto' : 'none';
+      });
+    }
     const front = clamp(Math.round(q), 0, last);
     if (front !== J.front) setFront(front);
 
-    const atIntro = p < 0.5;
-    if (atIntro !== J.atIntro) {
-      J.atIntro = atIntro;
-      document.body.classList.toggle('at-intro', atIntro);
-      el.aisle.inert = atIntro;
-      el.intro.inert = !atIntro;
-      el.player.inert = atIntro;
+    // 3. The whole collection: the camera swings round to a side view of the row
+    const stackOn = s > 0.02;
+    el.stack.style.visibility = stackOn ? 'visible' : 'hidden';
+    if (stackOn) {
+      const step = J.card * 0.46;
+      el.stack.style.opacity = String(smooth(0.1, 0.6, s));
+      el.stackRow.style.left = n1(50 - 22 * es) + '%';
+      el.stackRow.style.top = n1(43 + 21 * es) + '%';
+      el.stackRow.style.transform = 'rotateX(' + n1(-17 * es) + 'deg) rotateY(' + n1(-56 * es) + 'deg) translateZ(' + n1(t * 4 * step) + 'px)';
+    }
+
+    const zone = p < 0.5 ? 'intro' : s < 0.5 ? 'aisle' : 'stack';
+    if (zone !== J.zone) {
+      J.zone = zone;
+      el.intro.inert = zone !== 'intro';
+      el.aisle.inert = zone !== 'aisle';
+      el.stack.inert = zone !== 'stack';
+      el.pin.dataset.zone = zone;
     }
   }
   function onScroll() {
@@ -878,7 +945,8 @@
   function goStop(i) {
     const s = allStops();
     i = clamp(i, 0, s.length - 1);
-    tweenTo(s[i], clamp(Math.abs(s[i] - (window.pageYOffset || 0)) * 1.3, 650, 1150));
+    const from = window.pageYOffset || 0, zoomLeg = (i === 0 || nearestStop(from) === 0) && i <= 1 && Math.abs(s[i] - from) > 40;
+    tweenTo(s[i], zoomLeg ? 1900 : clamp(Math.abs(s[i] - from) * 1.3, 700, 1200));
   }
   function stepStop(dir) { goStop(nearestStop(tween.on ? tween.target : (window.pageYOffset || 0)) + dir); }
   const inJourney = function () { return (window.pageYOffset || 0) < appTop() - 2; };
@@ -926,12 +994,12 @@
   window.addEventListener('touchend', function () { touching = false; scheduleSettle(); }, { passive: true });
   function scheduleSettle() { clearTimeout(settleTimer); settleTimer = setTimeout(settle, 170); }
   function settle() {
-    if (tween.on || touching || !inJourney()) return;
+    if (tween.on || touching || window.__pulseFreeze || !inJourney()) return;
     const s = allStops(), i = nearestStop(window.pageYOffset || 0);
     if (Math.abs(s[i] - (window.pageYOffset || 0)) > 2) goStop(i);
   }
 
-  function goRecord(i) { goStop(clamp(i + 1, 0, AISLE.length + 1)); }
+  function goRecord(i) { goStop(clamp(i + 1, 0, AISLE.length + 1)); }   // past the last record = the collection view
   function playBrowse() {
     const id = AISLE[Math.max(0, J.front)];
     if (id === state.currentId) { togglePlay(); return; }

@@ -14,15 +14,17 @@ A fictional Y2K-style music streaming platform. Dig through a 3D record library,
 PULSE has three parts on one scrolling page:
 
 1. **The vinyl.** The site opens on one big record. A dot orbits it while the ring fills, genre names
-   appear around the edge and album covers fan in behind. Tap it, or scroll.
-2. **The record library.** The record dives into the vanishing point and you fly into a full-screen 3D
-   aisle of shelves: rows of spines, LED-lit ledges, records pulled halfway out, genre signs. Four featured
-   records hang from the rail. Each scroll, swipe or arrow key moves you one record down the aisle; Play
-   spins the one in front of you. After the fourth record you scroll into the app. Scrolling up plays the
-   whole thing in reverse, back to the vinyl.
-3. **The app.** A music-platform shell: sidebar (Home, Search, Your Library), top bar with search and
-   back/forward, routed pages for playlists, albums, artists and Liked Songs, a Now Playing panel with a
-   live spectrum and the queue, and a player bar that stays docked.
+   appear around the edge and album covers fan in behind. Tap it, or scroll: the camera tilts and zooms
+   into the grooves with a magnification readout (×1 to ×355) until the grooves become a road to the horizon.
+2. **The record library.** That road opens into a full-screen 3D aisle of shelves: rows of spines, LED-lit
+   ledges, records pulled halfway out, genre signs. Two featured records hang from the rail. Then the camera
+   swings round to a side view of the whole collection, all 14 records in a diagonal row: hover, focus or tap
+   one and the sleeve lifts with the vinyl sliding out; click to play. Each scroll, swipe or arrow key moves
+   exactly one stop, and scrolling up plays everything in reverse, back to the vinyl. **Enter the app** stays
+   visible the whole way.
+3. **The app.** A record-shop take on a music platform: a turntable whose tonearm drops while music plays,
+   your crate as record spines you pull out, sleeves instead of tiles, hash-routed pages for playlists,
+   albums, artists and Liked Songs, a queue, and a player bar that appears once you are in the app.
 
 There are no audio files. Every one of the 14 tracks is composed and synthesized in the browser with the
 Web Audio API from a small recipe (tempo, key, scale, chord progression, lead instrument), so play, pause,
@@ -32,14 +34,14 @@ seek and volume control real sound. The 3D aisle is CSS transforms only: no WebG
 
 | Brief item | Where |
 | --- | --- |
-| Landing view, one primary action | The vinyl: tap it to enter. In the aisle the one pink button is **Play** |
+| Landing view, one primary action | The vinyl: tap it to enter. In the aisle the one pink button is **Play**; **Enter the app** is always available |
 | 3+ playlists | 4 playlists (MiniDisc cartridges) plus Liked Songs, each with its own page |
 | Categories with working filtering | Genre tiles and genre chips filter tracks, artists and albums on the Search page |
 | Album cards | 6 albums as sleeves with a record that slides out; each has an album page |
 | Artist profiles | 6 artist pages: bio, facts, popular tracks, discography, "fans also like" |
 | Search | Top-bar search across title, artist, album, genre, key and bpm (press `/` to focus) |
 | Like button with feedback | Heart fills and bursts, counters bump, a toast confirms, saved in `localStorage`, Liked Songs page |
-| Persistent player bar | Play/pause, next/previous, seek, volume and mute, docked on every page |
+| Persistent player bar | Play/pause, next/previous, seek, volume and mute, docked on every page of the app |
 
 ## Run it
 
@@ -149,5 +151,7 @@ Manual checks by the team (fill in before submitting):
 - Libraries: none.
 - Interaction reference: the ring loader and "fly into an aisle" browsing were inspired by Luka Skhiladze's
   portfolio site. Nothing was copied; the vinyl, the record library, the code and the artwork are our own.
+- The groove zoom was inspired by the Mind of Akira site, and the side view of the collection by Jacob How's
+  portfolio. Again, only the ideas: all code and artwork here are our own.
 - Layout reference: the app shell follows the familiar music-app pattern (sidebar, pages, now-playing panel,
   docked player) popularised by services like Spotify.

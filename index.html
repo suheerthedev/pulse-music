@@ -13,13 +13,17 @@
   <link rel="stylesheet" href="css/style.css">
   <noscript><style>.journey { display: none; }</style></noscript>
 </head>
-<body class="at-intro">
+<body class="in-journey">
   <a class="skip" href="#/home">Skip to the music library</a>
 
   <!-- The scroll journey: vinyl record -> 3D record library (4 records) -> the app below.
        Everything here is driven by scroll position, so scrolling up plays it in reverse. -->
   <div class="journey" id="journey">
     <div class="journey__pin" id="pin">
+      <div class="journey__top">
+        <span class="logo"><span class="logo__dot" aria-hidden="true"></span>PULSE</span>
+        <a class="bubble journey__skip" href="#/home">Enter the app</a>
+      </div>
 
       <section class="aisle" id="aisle" aria-labelledby="aisleTitle">
         <div class="aisle__scene" aria-hidden="true">
@@ -27,10 +31,6 @@
           <div class="aisle__origin"><div class="aisle__env" id="aisleEnv"></div></div>
           <div class="aisle__fog"></div>
           <div class="aisle__origin"><div class="aisle__world" id="aisleWorld"></div></div>
-        </div>
-        <div class="aisle__top">
-          <span class="logo"><span class="logo__dot" aria-hidden="true"></span>PULSE</span>
-          <a class="aisle__skip" href="#/home">Enter the app</a>
         </div>
         <h1 id="aisleTitle">Dig the stacks. <em>Drop the needle.</em></h1>
         <div class="hud" role="group" aria-label="Record library">
@@ -77,9 +77,18 @@
           </svg>
           <div class="intro__dot" aria-hidden="true"></div>
         </div>
+        <div class="grooves" id="grooves" aria-hidden="true"><div class="grooves__plane" id="groovesPlane"></div></div>
+        <p class="mag" id="mag" aria-hidden="true"><span>Magnification</span><b id="magNum">×1.0</b></p>
         <p class="intro__hint" id="introHint" role="status">Loading the stacks</p>
-        <a class="intro__skip" id="introSkip" href="#/home">Skip to the app</a>
       </div>
+
+      <!-- The whole collection, seen from the side: hover or focus a record to pull it out, click to play -->
+      <section class="stack" id="stack" aria-labelledby="stackTitle">
+        <h2 id="stackTitle">The whole collection.</h2>
+        <div class="stack__scene"><div class="stack__row" id="stackRow"></div></div>
+        <p class="stack__hint" id="stackHint">Hover a record to pull it out. Click to play. Scroll for more.</p>
+        <p class="stack__cap" id="stackCap" aria-live="polite"></p>
+      </section>
 
     </div>
   </div>
@@ -92,11 +101,11 @@
         <nav class="side__nav" aria-label="Main">
           <a href="#/home" data-nav="home"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 11.2 12 4l8 7.2V20h-5.2v-5.4H9.2V20H4z"/></svg>Home</a>
           <a href="#/search" data-nav="search"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg>Search</a>
-          <a href="#/library" data-nav="library"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 4v16M10 4v16M14.5 5.2l4.6 14.4"/></svg>Your Library</a>
+          <a href="#/library" data-nav="library"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 4v16M10 4v16M14.5 5.2l4.6 14.4"/></svg>Your Crate</a>
         </nav>
       </div>
       <div class="panel side__lib">
-        <h2 class="side__h">Your Library</h2>
+        <h2 class="side__h">Your crate</h2>
         <ul class="side__list" id="sideList"></ul>
         <button type="button" class="side__stacks" data-action="to-stacks">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"/></svg>Back to the record stacks
@@ -120,7 +129,7 @@
         <nav class="tabs" aria-label="Main">
           <a href="#/home" data-nav="home">Home</a>
           <a href="#/search" data-nav="search">Search</a>
-          <a href="#/library" data-nav="library">Library</a>
+          <a href="#/library" data-nav="library">Crate</a>
         </nav>
       </header>
 
