@@ -48,16 +48,21 @@ seek and volume control real sound. The 3D aisle is CSS transforms only: no WebG
 
 An optional page in the app (`#/jam`, "Air Jam" in the navigation): air guitar with your webcam.
 
-- **Chord hand.** The picture is split into five columns (Em, G, C, D, Am). The column your palm is in sets the chord.
-- **Strum hand.** Any fast stroke down or up on the other side of the picture plays a six-string strum, one per
-  stroke; the drawn strings follow the hand. Faster strokes are louder and brighter, and the strings are staggered
+- **Two guitars.** An acoustic and an electric, each a 3D model built in code with three.js (no model files),
+  each with its own sound. The choice is remembered.
+- **Chord hand.** The guitar's neck is split into five zones (Em, G, C, D, Am). The zone your palm is over sets
+  the chord, and dots on the frets show how that chord is really fingered.
+- **Strum hand.** Any fast stroke down or up over the body plays a six-string strum, one per stroke; the
+  guitar follows the hand's height and its strings light up and shake. Faster strokes are louder and brighter, and the strings are staggered
   slightly, low-to-high on a downstroke and high-to-low on an upstroke.
 - **Mute.** Squeezing the chord hand into a tight fist stops the strings; strumming with it closed gives a muted
   "chk". A hand loosely curled round an imaginary neck does not mute.
-- **Sound.** Each string is a Karplus-Strong plucked-string model, synthesized in the browser, with a clean
-  and a distortion setting.
+- **Sound.** Each string is a Karplus-Strong plucked-string model, synthesized in the browser. The acoustic adds
+  the resonance of a hollow body; the electric is voiced like a pickup and has clean and distortion settings.
+- **Full window.** While the camera is on, the picture fills the window (with an optional true full-screen
+  button); Stop camera or Esc brings the page back.
 - **No camera needed.** Chord buttons, a Strum button, keys `1` to `5`, `Space` (strum) and `M` (mute) do
-  everything the camera does. If the camera is blocked, missing, busy, or the tracker cannot load, the page says so
+  everything the camera does. If three.js cannot load, a flat drawing of zones and strings is used instead. If the camera is blocked, missing, busy, or the tracker cannot load, the page says so
   and the buttons and keys keep working.
 - **Left-handed** mode mirrors the layout.
 
@@ -95,6 +100,7 @@ js/data.js      fictional catalog: genres, artists, albums, tracks, playlists
 js/audio.js     Web Audio synth engine and song generator
 js/app.js       views and router, player, likes, scroll journey and 3D aisle
 js/airjam.js    Air Jam: hand tracking, gestures, Karplus-Strong guitar, fallback controls
+js/guitar3d.js  Air Jam: the two 3D guitars (three.js, built from code)
 ```
 
 ## Design decisions
@@ -164,6 +170,9 @@ Air Jam checks (headless Chrome):
   mirrored picture, chord follows the still hand, strums follow the moving hand, camera released on Stop.
 - Camera blocked, no camera, and tracker download failure each show their message and leave the fallback working.
 - No network requests besides the tracker's own files.
+- Both 3D guitars rendered and inspected; chord zones measured on the neck match what the hand logic uses;
+  full-window mode on desktop and phone sizes (video cropped to fill, skeleton still lined up, page restored
+  on Stop and Esc); the flat fallback when three.js is unavailable.
 - Not covered by automation: a real person in front of a real webcam (lighting, speed, how the fist reads).
 
 Changes made along the way:
@@ -193,9 +202,11 @@ Manual checks by the team (fill in before submitting):
   [Hanken Grotesk](https://fonts.google.com/specimen/Hanken+Grotesk), Google Fonts, SIL Open Font License.
 - Audio: Web Audio API, built into the browser. No samples or recordings.
 - Artwork: generated SVG and CSS. No external images.
-- Libraries: none for the site itself. Air Jam loads
+- Libraries: none for the site itself. Air Jam loads [three.js](https://threejs.org) 0.187 (MIT) for the
+  3D guitars, and
   [MediaPipe Tasks Vision](https://www.npmjs.com/package/@mediapipe/tasks-vision) 0.10.35 and Google's
-  hand landmarker model (Apache 2.0) from a CDN, only when the camera is started.
+  hand landmarker model (Apache 2.0), both from a CDN: three.js when the Air Jam page opens, the tracker only
+  when the camera is started. The guitar models themselves are our own, generated in `js/guitar3d.js`.
 - Interaction reference: the ring loader and "fly into an aisle" browsing were inspired by Luka Skhiladze's
   portfolio site. Nothing was copied; the vinyl, the record library, the code and the artwork are our own.
 - The groove zoom was inspired by the Mind of Akira site, and the side view of the collection by Jacob How's

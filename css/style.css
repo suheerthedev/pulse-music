@@ -913,9 +913,31 @@ svg { display: block; }
 .jam__how ol { margin: 0; padding-left: 1.3em; display: grid; gap: 8px; color: var(--ice); }
 .jam__how b { color: #fff; }
 
-/* While the camera runs, frosted glass would be re-blurred on every video frame: use plain panels instead */
-.jam-live .panel, .jam-live .now, .jam-live .bar, .jam-live .player { -webkit-backdrop-filter: none; backdrop-filter: none; }
-.jam-live .panel, .jam-live .now { background: linear-gradient(160deg, #2B2A5C, #1A1842 45%, #173A52); }
+.jam [hidden] { display: none !important; }
+.jam__opts { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+
+/* Live: while the camera runs, the picture fills the window and the rest of the app steps aside.
+   (Hiding it also saves the browser from re-blurring the frosted panels on every video frame.) */
+html.jam-lock { overflow: hidden; }
+.jam-live .journey, .jam-live .side, .jam-live .bar, .jam-live .now, .jam-live .player, .jam-live .foot, .jam-live .skip,
+.jam-live .jam__head > div, .jam-live .jam__pads, .jam-live .jam__strum, .jam-live .jam__how { visibility: hidden; }
+.jam-live .journey * { visibility: hidden !important; }   /* some journey layers switch their own visibility */
+.jam-live .view { container-type: normal; }       /* so the stage can be fixed to the window, not to this column */
+.jam-live .jam__stage {
+  position: fixed; inset: 0; z-index: 200; width: auto; margin: 0; aspect-ratio: auto;
+  border: 0; border-radius: 0; background: #0C0B24; box-shadow: none;
+}
+.jam-live .jam__stage[data-camera="on"] video { opacity: .9; }
+.jam-live #jamStart { position: fixed; z-index: 201; top: calc(12px + env(safe-area-inset-top, 0px)); right: 12px; }
+.jam-live .jam__opts { position: fixed; z-index: 201; top: calc(12px + env(safe-area-inset-top, 0px)); left: 12px; right: 190px; gap: 6px 14px; }
+.jam-live .jam__opts .jam__group { gap: 6px; }
+.jam-live .jam__opts .chip { min-height: 36px; padding: 0 13px; font-size: .875rem; }
+.jam-live .jam__opts .chip:not([aria-pressed="true"]) { background: rgba(12, 11, 36, .8); border-color: rgba(221, 232, 245, .45); }
+.jam-live .jam__status {
+  position: fixed; z-index: 201; left: 50%; bottom: calc(14px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
+  width: max-content; max-width: calc(100% - 24px); min-height: 0; text-align: center;
+}
+.jam:fullscreen { background: #0C0B24; }
 
 /* Way in from Home */
 .jamcard {
@@ -933,7 +955,7 @@ svg { display: block; }
 .jamcard__go { flex: none; padding: 8px 16px; border-radius: 999px; font-weight: 700; color: var(--indigo); background: linear-gradient(180deg, #F6F9FD, var(--chrome)); }
 @media (min-width: 700px) {
   .jam__controls { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); align-items: stretch; }
-  .jam__controls > .jam__group:last-child { grid-column: 1 / -1; }
+  .jam__controls > .jam__opts { grid-column: 1 / -1; }
   .jam__strum { height: 100%; }
 }
 
