@@ -55,7 +55,8 @@
     view: null, viewToken: 0, gl: null,       // the 3D guitar, when three.js is available
     strumAt: null,                            // where the strumming spot is on screen (for sparks)
     pose: null, poseT: 0, heldAt: -9, lastFret: null, handSize: 0,   // where the guitar is: it follows the hands
-    lastDrawTs: 0, lastDetectTs: 0, busy: false, slowFor: 0, ratio: 1.5, fpsBest: 0, sagFor: 0, rebenchAt: 0,
+    lastDrawTs: 0, lastDetectTs: 0, lastTs: 0, busy: false, fresh: false, slowFor: 0, ratio: 1.5,
+    drawMs: 0, gapMax: 0, diag: [], sampleAt: 0, startAt: 0,
     fit: { sx: 1, ox: 0, sy: 1, oy: 0 },      // how the camera picture is scaled to cover the stage
     live: false,
     camera: 'off',            // off | starting | loading | on | error
@@ -67,7 +68,7 @@
     stroke: { dir: 0, travel: 0, fired: false }, lineY: STRUM.y,
     ms: 0, fps: 0, lastDetectAt: 0, delegate: '', bench: null,
     strings: [0, 1, 2, 3, 4, 5].map(function () { return { amp: 0, t0: 0 }; }),
-    particles: [], strums: 0, last: null, status: '', pr: 1
+    particles: [], strums: 0, last: null, status: '', statusAt: 0, pr: 1
   };
   if (saved('jam-guitar') === 'electric') S.guitar = 'electric';
 
@@ -385,64 +386,153 @@
   /* =====================================================================
      Camera + tracker
      ===================================================================== */
-  const T = { vision: null, files: null, model: null, spare: null };
-  async function makeTracker(delegate) {
-    return T.vision.HandLandmarker.createFromOptions(T.files, {
-      baseOptions: { modelAssetBuffer: new Uint8Array(T.model), delegate: delegate },
-      runningMode: 'VIDEO', numHands: 2,
-      minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5
+  /* Tracking runs on its own thread (js/jam-worker.js) so it can never hold up drawing or sound; if the
+     browser cannot do that, it runs here on the main thread instead. Either way it is timed all the time:
+     - at the start, the graphics card is timed against the processor and the faster one is kept;
+     - if tracking later becomes much slower than it was, the tracker is restarted from scratch (which
+       clears anything it may have piled up), on the other one of the two;
+     - frames are only sent when the tracker is free, and never so fast that it works flat out. */
+  const T = { vision: null, files: null, model: null };
+  const TR = { mode: '', worker: null, gen: 0, ready: false, pending: false, sentAt: 0, rt: 0, delegate: '', busy: false,
+    bench: null, base: 0, slowSince: 0, lastRestart: 0, restarts: 0, why: '' };
+  const abs = function (u) { return new URL(u, document.baseURI).href; };
+  const TRACKER_OPTIONS = { runningMode: 'VIDEO', numHands: 2, minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5 };
+
+  async function fetchModel() {
+    if (T.model) return;
+    for (const url of CFG.models) {
+      try { const r = await fetch(url); if (r.ok) { T.model = await r.arrayBuffer(); return; } } catch (e) { /* try the next address */ }
+    }
+    throw new Error('model download failed');
+  }
+  function killWorker() {
+    if (TR.worker) { try { TR.worker.terminate(); } catch (e) { /* already gone */ } }
+    TR.worker = null; TR.ready = false; TR.pending = false;
+  }
+  function startWorker(delegate) {
+    killWorker();
+    const gen = ++TR.gen;
+    return new Promise(function (resolve, reject) {
+      let w;
+      try { w = new Worker(abs('js/jam-worker.js')); } catch (e) { reject(e); return; }
+      TR.worker = w;
+      const timer = setTimeout(function () { reject(new Error('the tracker took too long to start')); }, 25000);
+      w.onmessage = function (ev) {
+        if (gen !== TR.gen) return;
+        const m = ev.data;
+        if (m.type === 'hands') { TR.pending = false; TR.rt = TR.rt ? TR.rt * 0.85 + (performance.now() - TR.sentAt) * 0.15 : performance.now() - TR.sentAt; onHands(m.hands, m.ms); }
+        else if (m.type === 'ready') { clearTimeout(timer); TR.ready = true; TR.delegate = S.delegate = m.delegate; resolve(m.delegate); }
+        else if (m.type === 'error') { clearTimeout(timer); reject(new Error(m.message)); }
+      };
+      w.onerror = function (ev) {
+        if (ev && ev.preventDefault) ev.preventDefault();
+        clearTimeout(timer);
+        if (gen !== TR.gen) return;
+        if (TR.ready) restartTracker('crashed'); else reject(new Error('the tracker thread failed'));
+      };
+      const model = T.model.slice(0);
+      w.postMessage({ type: 'init', lib: abs(CFG.lib), wasm: abs(CFG.wasm), model: model, delegates: [delegate], debug: gen === 1 ? CFG.debugSlow || null : null }, [model]);
     });
   }
-  async function loadTracker() {
-    if (S.landmarker) return;
+  async function makeTracker(delegate) {
     if (!T.vision) T.vision = await import(CFG.lib);
     if (!T.files) T.files = await T.vision.FilesetResolver.forVisionTasks(CFG.wasm);
-    if (!T.model) {
-      for (const url of CFG.models) {
-        try { const r = await fetch(url); if (r.ok) { T.model = await r.arrayBuffer(); break; } } catch (e) { /* try the next address */ }
+    return T.vision.HandLandmarker.createFromOptions(T.files, Object.assign({ baseOptions: { modelAssetBuffer: new Uint8Array(T.model), delegate: delegate } }, TRACKER_OPTIONS));
+  }
+  async function loadTracker() {
+    await fetchModel();
+    TR.bench = { n: 0, sum: 0 }; TR.base = 0; TR.slowSince = 0;
+    if (TR.mode === 'worker' && TR.ready) return;
+    if (TR.mode === 'main' && S.landmarker) return;
+    if (CFG.worker !== false && window.Worker && window.createImageBitmap) {
+      for (const delegate of CFG.delegates) {
+        try { await startWorker(delegate); TR.mode = 'worker'; return; } catch (e) { killWorker(); }
       }
-      if (!T.model) throw new Error('model download failed');
     }
     let lastErr = null;
     for (const delegate of CFG.delegates) {
-      try {
-        S.landmarker = await makeTracker(delegate);
-        S.delegate = delegate;
-        S.bench = { n: 0, sum: 0, tried: [delegate], first: null, busy: false };
-        return;
-      } catch (e) { lastErr = e; }
+      try { S.landmarker = await makeTracker(delegate); TR.delegate = S.delegate = delegate; TR.mode = 'main'; return; } catch (e) { lastErr = e; }
     }
     throw lastErr || new Error('tracker failed to start');
+  }
+  /* Swap to a fresh tracker on the given delegate (GPU or CPU). If that one will not start, go back to the old one. */
+  function useDelegate(delegate) {
+    const prev = TR.delegate;
+    TR.busy = true;
+    const start = function (d) {
+      if (TR.mode === 'worker') return startWorker(d);
+      return makeTracker(d).then(function (lm) {
+        const old = S.landmarker;
+        S.landmarker = lm; TR.delegate = S.delegate = d;
+        try { if (old) old.close(); } catch (e) { /* ignore */ }
+      });
+    };
+    return start(delegate).catch(function () { return start(prev); }).then(
+      function () { TR.busy = false; S.ms = 0; S.fps = 0; S.lastDetectAt = 0; },
+      function (e) { TR.busy = false; stopCamera(); fail('The hand tracker stopped and could not be restarted. You can still play with the buttons and keys below.'); throw e; }
+    );
   }
   /* Graphics-card tracking is usually fastest, but on some machines it is far slower than the processor.
      Time the first frames; if they are slow, try the other one and keep whichever wins. */
   function benchmark(ms) {
-    const b = S.bench;
-    if (!b || b.busy || b.done) return;
+    const b = TR.bench;
+    if (!b || b.done || TR.busy) return;
     if (++b.n <= 3) return;                                   // let it warm up
     b.sum += ms;
     if (b.n < 15) return;
-    const avg = b.sum / (b.n - 3);
-    if (!b.first) {
-      const other = CFG.delegates.filter(function (d) { return b.tried.indexOf(d) < 0; })[0];
-      if (avg < (b.limit === undefined ? 45 : b.limit) || !other) { b.done = true; return; }
-      b.busy = true;
-      makeTracker(other).then(function (lm) {
-        if (!S.landmarker || S.camera !== 'on') { lm.close(); b.done = true; return; }
-        b.first = { lm: S.landmarker, delegate: S.delegate, avg: avg };
-        S.landmarker = lm; S.delegate = other; b.tried.push(other);
-        b.n = 0; b.sum = 0; b.busy = false;
-      }).catch(function () { b.done = true; b.busy = false; });
-    } else {
-      if (avg > b.first.avg) {                                // the first one was faster after all
-        const slow = S.landmarker;
-        S.landmarker = b.first.lm; S.delegate = b.first.delegate;
-        try { slow.close(); } catch (e) { /* ignore */ }
-      } else {
-        try { b.first.lm.close(); } catch (e) { /* ignore */ }
-      }
-      b.first = null; b.done = true;
+    const avg = b.sum / (b.n - 3), settle = function (base) { b.done = true; TR.base = base; };
+    const other = CFG.delegates.filter(function (d) { return d !== TR.delegate; })[0];
+    if (b.only || b.firstAvg !== undefined || avg < 40 || !other) {
+      if (b.firstAvg !== undefined && avg > b.firstAvg) {     // the first one was faster after all
+        const base = b.firstAvg;
+        useDelegate(b.first).then(function () { settle(base); }, function () { /* reported by useDelegate */ });
+      } else settle(avg);
+      return;
     }
+    b.firstAvg = avg; b.first = TR.delegate; b.n = 0; b.sum = 0;
+    useDelegate(other).catch(function () { /* reported by useDelegate */ });
+  }
+  /* If tracking has become much slower than it was when it was timed, start it afresh on the other delegate.
+     Not more than once every 30 seconds, and only a few times: if it is still slow after that, the machine
+     is simply busy or hot, and sending frames less often (see frame) is what keeps things smooth. */
+  function watchdog(t) {
+    if (!TR.bench || !TR.bench.done || TR.busy || !TR.base) return;
+    if (S.ms <= Math.max(3 * TR.base, 90)) { TR.slowSince = 0; return; }
+    if (!TR.slowSince) TR.slowSince = t;
+    if (t - TR.slowSince > 4000) restartTracker('slow');
+  }
+  function restartTracker(why) {
+    const t = performance.now();
+    if (TR.busy || S.camera !== 'on' || TR.restarts >= 4 || (TR.lastRestart && t - TR.lastRestart < 30000)) return;
+    TR.restarts++; TR.lastRestart = t; TR.slowSince = 0; TR.why = why;
+    const other = CFG.delegates.filter(function (d) { return d !== TR.delegate; })[0];
+    useDelegate(why !== 'crashed' && other ? other : TR.delegate).then(function () {
+      S.ms = 0; S.fps = 0; S.lastDetectAt = 0;
+      TR.bench = { n: 0, sum: 0, only: true };                 // time the fresh one, to know what "slow" means for it
+    }, function () { /* reported by useDelegate */ });
+  }
+  /* A tracked frame has come back (from the worker, or from the main-thread tracker) */
+  function onHands(hands, ms) {
+    if (S.camera !== 'on') return;
+    const t = performance.now();
+    S.ms = S.ms ? S.ms * 0.85 + ms * 0.15 : ms;
+    if (S.lastDetectAt) { const f = 1000 / Math.max(1, t - S.lastDetectAt); S.fps = S.fps ? S.fps * 0.9 + f * 0.1 : f; }
+    S.lastDetectAt = t;
+    benchmark(ms);
+    watchdog(t);
+    processHands(hands, t / 1000);
+    S.fresh = true;
+    kick();
+  }
+  function sendFrame(ts) {
+    const gen = TR.gen, w = TR.worker;
+    TR.pending = true; TR.sentAt = performance.now();
+    S.lastVideoTime = S.video.currentTime; S.lastDetectTs = ts;
+    createImageBitmap(S.video).then(function (bmp) {
+      if (gen !== TR.gen || !TR.worker || S.camera !== 'on') { bmp.close(); if (gen === TR.gen) TR.pending = false; return; }
+      S.stamp = Math.max(S.stamp + 1, performance.now());           // the tracker needs strictly increasing times
+      w.postMessage({ type: 'frame', bitmap: bmp, stamp: S.stamp }, [bmp]);
+    }).catch(function () { if (gen === TR.gen) TR.pending = false; });
   }
 
   async function startCamera() {
@@ -481,6 +571,7 @@
     }
     if (!S.mounted || !S.stream) return stopCamera();
     S.seenAt = performance.now() / 1000;
+    S.diag = []; S.sampleAt = 0; S.gapMax = 0; TR.restarts = 0; TR.lastRestart = 0; TR.why = '';
     setCamera('on');
     size();
     kick();
@@ -491,7 +582,8 @@
     S.stream = null;
     if (S.video) S.video.srcObject = null;
     S.hands.fret = S.hands.strum = null; S.strumY = null; S.muted = false; S.lowLight = false; S.fps = 0; S.lineY = STRUM.y;
-    S.heldAt = -9; S.lastFret = null; S.handSize = 0; S.lastDetectAt = 0; S.fpsBest = 0; S.sagFor = 0;
+    S.heldAt = -9; S.lastFret = null; S.handSize = 0; S.lastDetectAt = 0; S.ms = 0; S.sampleAt = 0;
+    TR.pending = false; TR.slowSince = 0;
     setLive(false);
     if (S.camera !== 'error') setCamera('off');
   }
@@ -506,6 +598,8 @@
     if (!on && document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function () { /* already out */ });
     const full = $('#jamFull');
     if (full) full.hidden = !on || !S.root || !S.root.requestFullscreen;
+    const rep = $('#jamReport');
+    if (rep) rep.hidden = !on;
     S.ratio = on ? 1 : 1.5; S.slowFor = 0;
     size();
     kick();
@@ -597,7 +691,7 @@
       CHORDS.forEach(function (ch, i) {
         const p = L.zones[i], on = i === S.chord;
         g.fillStyle = on ? '#FFFFFF' : 'rgba(241, 246, 252, .92)';
-        g.font = Math.min((on ? 27 : 18) * u, zpx * (on ? 0.42 : 0.32)) + 'px Michroma, "Arial Black", sans-serif';
+        g.font = Math.max(10, 2 * Math.round(Math.min((on ? 27 : 18) * u, zpx * (on ? 0.42 : 0.32)) / 2)) + 'px Michroma, "Arial Black", sans-serif';
         label(ch.name, p.x * W, p.y * H);
         if (zpx < 64 * u) return;
         g.font = 12 * u + 'px "Hanken Grotesk", sans-serif';
@@ -647,7 +741,7 @@
     }
     if (S.camera === 'on' && S.fps) {
       g.fillStyle = 'rgba(241, 246, 252, .95)'; g.font = 12 * u + 'px "Hanken Grotesk", sans-serif'; g.textAlign = 'right';
-      label('tracking ' + Math.round(S.fps) + ' fps', W - 14 * u, (S.live ? 80 : 22) * S.pr);   // under the Stop button
+      label(nowSec - S.seenAt > 3 ? 'waiting for hands' : 'tracking ' + Math.round(S.fps) + ' fps', W - 14 * u, (S.live ? 80 : 22) * S.pr);   // under the Stop button
       g.textAlign = 'center';
     }
 
@@ -682,59 +776,89 @@
     return busy;
   }
 
-  /* One loop: read a camera frame, track, update gestures, draw. It sleeps when nothing is moving,
-     and it never draws more often than there is something new to show (a 120 Hz screen would otherwise
-     redraw the whole window four times for every camera frame, which is what heats a laptop up). */
+  /* One loop: hand a camera frame to the tracker when it is free, and draw when there is something new.
+     It sleeps when nothing is moving, and it never draws more often than there is something to show
+     (a 120 Hz screen would otherwise redraw the whole window four times for every camera frame). */
   function frame(ts) {
     S.raf = 0;
     if (!S.mounted) return;
     const now = ts / 1000;
-    let fresh = false;
-    if (S.camera === 'on' && S.landmarker && S.video.readyState >= 2) {
-      if (S.video.currentTime !== S.lastVideoTime && ts - S.lastDetectTs >= 28) {       // at most ~30 looks a second
-        S.lastVideoTime = S.video.currentTime; S.lastDetectTs = ts;
-        let res = null;
-        S.stamp = Math.max(S.stamp + 1, performance.now());           // the tracker needs strictly increasing times
-        const t0 = performance.now();
-        try { res = S.landmarker.detectForVideo(S.video, S.stamp); } catch (e) { res = null; }
-        const t1 = performance.now();
-        S.ms = S.ms ? S.ms * 0.9 + (t1 - t0) * 0.1 : t1 - t0;
-        if (S.lastDetectAt) { const f = 1000 / Math.max(1, t1 - S.lastDetectAt); S.fps = S.fps ? S.fps * 0.9 + f * 0.1 : f; }
-        S.lastDetectAt = t1;
-        benchmark(t1 - t0);
-        processHands(res && res.landmarks ? res.landmarks : [], t1 / 1000);
-        checkLight(now);
-        fresh = true;
+    if (S.lastTs) S.gapMax = Math.max(S.gapMax, ts - S.lastTs);
+    S.lastTs = ts;
+    if (S.camera === 'on' && S.video.readyState >= 2) {
+      // How often to look: 30 times a second at most; less often if a look takes long (so the tracker is
+      // never working flat out, which is what makes a laptop hot and then slow); and only 10 times a second
+      // while no hands are in view.
+      const idle = now - S.seenAt > 3, every = Math.max(idle ? 100 : 33, Math.min(125, 1.7 * S.ms)) - 5;
+      if (!TR.busy && S.video.currentTime !== S.lastVideoTime && ts - S.lastDetectTs >= every) {
+        if (TR.mode === 'worker') { if (TR.ready && !TR.pending) sendFrame(ts); }
+        else if (S.landmarker) {
+          S.lastVideoTime = S.video.currentTime; S.lastDetectTs = ts;
+          S.stamp = Math.max(S.stamp + 1, performance.now());
+          const t0 = performance.now();
+          let res = null;
+          try { res = S.landmarker.detectForVideo(S.video, S.stamp); } catch (e) { res = null; }
+          onHands(res && res.landmarks ? res.landmarks : [], performance.now() - t0);
+        }
       }
+      // No answer for a long time (longer while it is still warming up): treat the tracker as stuck
+      if (TR.mode === 'worker' && TR.pending && performance.now() - TR.sentAt > (TR.bench && TR.bench.done ? 4000 : 9000)) { TR.pending = false; restartTracker('stuck'); }
+      checkLight(now);
       updateStatus(now);
+      sample(now);
     }
     const since = ts - S.lastDrawTs;
-    if (fresh || since >= (S.camera === 'on' ? 70 : 15)) {
+    if (S.fresh || since >= (S.camera === 'on' ? 70 : 15)) {
+      const fresh = S.fresh, d0 = performance.now();
+      S.fresh = false;
       S.busy = draw(now, Math.min(0.1, S.lastDrawTs ? since / 1000 : 0.016));
+      S.drawMs = S.drawMs * 0.9 + (performance.now() - d0) * 0.1;
       S.lastDrawTs = ts;
-      if (fresh) tune();
+      if (fresh) tune(now);
     }
-    if (S.camera === 'on' || S.busy) kick(); else S.lastDrawTs = 0;
+    if (S.camera === 'on' || S.busy) kick(); else { S.lastDrawTs = 0; S.lastTs = 0; }
   }
-  /* If tracking stays slow, draw the guitar with fewer pixels to give the tracker more room */
-  function tune() {
-    if (!S.fps || !S.live) return;
-    if (S.fps < 19) S.slowFor++; else if (S.slowFor > 0) S.slowFor--;
-    if (S.view && S.slowFor > 75 && S.ratio > 0.6) {
+  /* If tracking stays slow while hands are in view, draw the guitar with fewer pixels to leave more room for it */
+  function tune(now) {
+    if (!S.view || !S.fps || !S.live || now - S.seenAt > 1) return;
+    if (S.fps < 17) S.slowFor++; else if (S.slowFor > 0) S.slowFor--;
+    if (S.slowFor > 75 && S.ratio > 0.6) {
       S.ratio = S.ratio > 0.75 ? 0.75 : 0.6; S.slowFor = 0;
       S.view.setRatio(S.ratio);
     }
-    // If tracking was fast and has since dropped to about half (a laptop getting warm, say), time the
-    // graphics card against the processor again and keep the faster. At most once a minute.
-    const b = S.bench, t = performance.now();
-    if (b && b.done) {
-      S.fpsBest = Math.max(S.fpsBest * 0.9995, S.fps);
-      if (S.fps < 0.55 * S.fpsBest) S.sagFor++; else S.sagFor = 0;
-      if (S.sagFor > 90 && t - S.rebenchAt > 60000 && CFG.delegates.length > 1) {
-        S.rebenchAt = t; S.sagFor = 0; S.fpsBest = 0;
-        S.bench = { n: 0, sum: 0, tried: [S.delegate], first: null, busy: false, limit: 0 };
-      }
-    }
+  }
+
+  /* A running record of how fast things are going, one line every 5 seconds, kept for the last 10 minutes.
+     "Speed report" copies it, so a slowdown on one machine can be understood on another. Numbers only. */
+  function sample(now) {
+    if (now - S.sampleAt < 5) return;
+    if (!S.sampleAt) { S.sampleAt = now; S.startAt = now; return; }
+    S.sampleAt = now;
+    const mem = window.performance && performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1048576) : 0;
+    S.diag.push([Math.round(now - S.startAt), Math.round(S.fps), Math.round(S.ms), Math.round(TR.rt), Math.round(S.drawMs * 10) / 10, Math.round(S.gapMax),
+      (S.hands.fret ? 1 : 0) + (S.hands.strum ? 1 : 0), TR.delegate + (TR.mode === 'worker' ? '/w' : '/m'), S.ratio, TR.restarts, mem].join(' '));
+    S.gapMax = 0;
+    if (S.diag.length > 120) S.diag.shift();
+  }
+  function report() {
+    let gpu = 'unknown';
+    try {
+      const c = document.createElement('canvas'), gl = c.getContext('webgl'), ext = gl.getExtension('WEBGL_debug_renderer_info');
+      gpu = String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+      const lose = gl.getExtension('WEBGL_lose_context'); if (lose) lose.loseContext();
+    } catch (e) { /* no WebGL */ }
+    return ['PULSE Air Jam speed report',
+      navigator.userAgent,
+      'gpu: ' + gpu + ' | cores: ' + (navigator.hardwareConcurrency || '?') + ' | pixel ratio: ' + window.devicePixelRatio + ' | window: ' + window.innerWidth + 'x' + window.innerHeight,
+      'camera: ' + (S.video ? S.video.videoWidth + 'x' + S.video.videoHeight : '-') + ' | guitar: ' + S.guitar + (S.view ? ' (3D)' : ' (flat)') + ' | tracker: ' + TR.mode + ' ' + TR.delegate + ' | first timing: ' + Math.round(TR.base) + ' ms | restarts: ' + TR.restarts + (TR.why ? ' (' + TR.why + ')' : ''),
+      'seconds | tracking fps | track ms | round trip ms | draw ms | longest frame gap ms | hands | tracker | guitar pixels | restarts | memory MB'
+    ].concat(S.diag).join('\n');
+  }
+  function copyReport() {
+    const text = report(), done = function (ok) { setStatus(ok ? 'Speed report copied. Paste it into your message.' : 'Could not copy. The report is in the browser console.'); };
+    try { console.log(text); } catch (e) { /* no console */ }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+    else done(false);
   }
   function kick() { if (S.mounted && !S.raf) S.raf = requestAnimationFrame(frame); }
 
@@ -768,6 +892,7 @@
             '<button type="button" class="chip" id="jamMute" aria-pressed="' + S.padMute + '">Mute <kbd>M</kbd></button>' +
             '<button type="button" class="chip" id="jamLefty" aria-pressed="' + S.lefty + '">Left-handed</button>' +
             '<button type="button" class="chip" id="jamFull" hidden>Full screen</button>' +
+            '<button type="button" class="chip" id="jamReport" hidden>Speed report</button>' +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -786,7 +911,7 @@
 
   function setStatus(msg) {
     if (msg === S.status) return;
-    S.status = msg;
+    S.status = msg; S.statusAt = performance.now() / 1000;
     const el = $('#jamStatus');
     if (el) el.textContent = msg;
   }
@@ -806,7 +931,9 @@
   }
   function updateStatus(now) {
     const lost = now - S.seenAt > 0.7, both = S.hands.fret && S.hands.strum;
-    setStatus(lost && S.lowLight ? 'It is too dark to see your hands. Turn on a light or face a window.'
+    if (S.status.indexOf('Speed report') === 0 && now - S.statusAt < 4) return;      // leave the copy message up for a moment
+    setStatus(TR.busy ? 'One moment: tuning the hand tracker.'
+      : lost && S.lowLight ? 'It is too dark to see your hands. Turn on a light or face a window.'
       : lost ? 'No hands in view. Hold them up, about an arm’s length from the camera.'
       : S.muted ? 'Muted, because your chord hand is a fist. Open it to let the strings ring.'
       : !both && S.hands.fret ? 'Chord ' + CHORDS[S.chord].name + '. Bring in your other hand to strum.'
@@ -860,6 +987,7 @@
       case 'jamAcoustic': setGuitar('acoustic'); break;
       case 'jamElectric': setGuitar('electric'); break;
       case 'jamFull': toggleFullscreen(); break;
+      case 'jamReport': copyReport(); break;
       case 'jamClean': S.dist = false; audioInit(); applyTone(); syncPads(); break;
       case 'jamDist': S.dist = true; audioInit(); applyTone(); syncPads(); break;
       case 'jamMute': toggleMute(); break;
@@ -925,6 +1053,8 @@
     window.removeEventListener('resize', onResize);
     document.removeEventListener('fullscreenchange', onResize);
     if (S.ro) { S.ro.disconnect(); S.ro = null; }
+    killWorker(); TR.mode = TR.mode === 'worker' ? '' : TR.mode;
+    if (S.landmarker) { try { S.landmarker.close(); } catch (e) { /* ignore */ } S.landmarker = null; if (TR.mode === 'main') TR.mode = ''; }
     S.viewToken++;
     if (S.view) { try { S.view.dispose(); } catch (e) { /* context already gone */ } S.view = null; }
     S.strumAt = null; S.pose = null;
@@ -939,7 +1069,7 @@
     html: html, mount: mount, unmount: unmount, handleKey: handleKey,
     // Test hooks: feed synthetic hand landmarks and read the state back
     _feed: function (hands, now) { processHands(hands, now); kick(); },
-    _state: function () { return { chord: CHORDS[S.chord].name, muted: S.muted, padMute: S.padMute, dist: S.dist, lefty: S.lefty, guitar: S.guitar, view: S.view ? S.view.type() : null, live: S.live, edges: FLAT_EDGES, pose: S.pose, ratio: S.ratio, fit: S.fit, delegate: S.delegate, ms: Math.round(S.ms), fps: Math.round(S.fps), strums: S.strums, last: S.last, camera: S.camera, status: S.status, notes: Object.keys(A.bufs).length, ctx: A.ctx ? A.ctx.state : 'none' }; },
+    _state: function () { return { chord: CHORDS[S.chord].name, muted: S.muted, padMute: S.padMute, dist: S.dist, lefty: S.lefty, mode: TR.mode, restarts: TR.restarts, base: Math.round(TR.base), rt: Math.round(TR.rt), drawMs: Math.round(S.drawMs * 10) / 10, guitar: S.guitar, view: S.view ? S.view.type() : null, live: S.live, edges: FLAT_EDGES, pose: S.pose, ratio: S.ratio, fit: S.fit, delegate: S.delegate, ms: Math.round(S.ms), fps: Math.round(S.fps), strums: S.strums, last: S.last, camera: S.camera, status: S.status, notes: Object.keys(A.bufs).length, ctx: A.ctx ? A.ctx.state : 'none' }; },
     _audio: function () { return A; },
     // Where the middle of chord zone i is right now, across and down the mirrored picture
     _zonePoint: function (i) {
@@ -948,7 +1078,8 @@
       return { x: P.x - Math.cos(P.ang) * d / S.aspect, y: P.y - Math.sin(P.ang) * d };
     },
     _particles: function () { return S.particles.length; },
-    _bench: function () { return S.bench; },
+    _report: report,
+    _bench: function () { return TR.bench; },
     _hands: function () { return { fret: S.hands.fret ? palm(S.hands.fret) : null, strum: S.hands.strum ? palm(S.hands.strum) : null, v: S.strumV }; }
   };
 })();

@@ -104,6 +104,7 @@ js/audio.js     Web Audio synth engine and song generator
 js/app.js       views and router, player, likes, scroll journey and 3D aisle
 js/airjam.js    Air Jam: hand tracking, gestures, Karplus-Strong guitar, fallback controls
 js/guitar3d.js  Air Jam: the two 3D guitars (three.js, built from code)
+js/jam-worker.js  Air Jam: hand tracking on its own thread
 ```
 
 ## Design decisions
@@ -167,11 +168,14 @@ Air Jam checks (headless Chrome):
 - Gesture logic with scripted hand positions: five chord columns, fast down and up strokes anywhere in the
   picture, slow drift ignored, a hand that drops out mid-stroke, tight fist mutes but a loose grip does not,
   one hand only, left-handed mode.
-- Speed: the tracker is timed on its first frames and switches between graphics card and processor to
-  whichever is faster on the machine, and re-checks if tracking later drops to half its best rate. The page
-  redraws once per camera frame instead of at the screen's refresh rate, uses fewer pixels while the camera
-  is on, lowers the guitar's resolution if tracking stays slow, and removes finished notes from the audio
-  graph. A 70 to 90 second soak run showed steady frame times and memory.
+- Speed, and staying fast: hand tracking runs on its own thread (`js/jam-worker.js`), so it cannot hold up
+  drawing or sound; frames are only sent when the tracker is free, at most 30 a second, less often when a look
+  takes long, and 10 a second while no hands are in view. The tracker is timed at the start (graphics card
+  against processor, the faster is kept) and watched afterwards: if it becomes much slower than it was, it is
+  restarted from scratch on the other one. The page redraws once per tracked frame, uses fewer pixels while the
+  camera is on, and removes finished notes from the audio graph. Tested: the thread, the main-thread fallback,
+  the switch between graphics card and processor, and a forced slowdown that the watchdog recovered from.
+  A **Speed report** button (shown while the camera is on) copies a timing log for diagnosing a slow machine.
 - The real tracker, fed test clips of hands through a fake camera: model loads, skeleton lines up with the
   mirrored picture, chord follows the still hand, strums follow the moving hand, camera released on Stop.
 - Camera blocked, no camera, and tracker download failure each show their message and leave the fallback working.
