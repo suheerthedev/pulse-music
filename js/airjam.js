@@ -58,7 +58,7 @@
     lastDrawTs: 0, lastDetectTs: 0, lastTs: 0, busy: false, fresh: false, slowFor: 0, ratio: 1, budget: 1280,
     drawMs: 0, gapMax: 0, diag: [], sampleAt: 0, startAt: 0,
     fit: { sx: 1, ox: 0, sy: 1, oy: 0 },      // how the camera picture is scaled to cover the stage
-    live: false,
+    live: false, solo: null, moved: [], timer: 0, next: 0,
     camera: 'off',            // off | starting | loading | on | error
     error: '', aspect: 1.33, stream: null, landmarker: null, raf: 0, lastVideoTime: -1, stamp: 0,
     hands: { fret: null, strum: null },       // smoothed landmark sets
@@ -503,7 +503,8 @@
     S.stream = null;
     if (S.video) S.video.srcObject = null;
     S.hands.fret = S.hands.strum = null; S.strumY = null; S.muted = false; S.lowLight = false; S.fps = 0; S.lineY = STRUM.y;
-    S.heldAt = -9; S.lastFret = null; S.handSize = 0; S.lastDetectAt = 0; S.ms = 0; S.sampleAt = 0;
+    S.heldAt = -9; S.lastFret = null; S.handSize = 0; S.lastDetectAt = 0; S.ms = 0; S.sampleAt = 0; S.lastTs = 0; S.lastDrawTs = 0;
+    clearTimeout(S.timer); S.timer = 0;
     setLive(false);
     if (S.camera !== 'error') setCamera('off');
   }
@@ -513,34 +514,66 @@
   function setLive(on) {
     if (on === S.live) return;
     S.live = on;
-    document.body.classList.toggle('jam-live', on);
+    if (on) S.scrollY = window.scrollY;
+    if (on && S.view) enterSolo();
+    else {
+      leaveSolo();
+      document.body.classList.toggle('jam-live', on);       // flat picture (no 3D): the stage itself fills the window
+    }
     document.documentElement.classList.toggle('jam-lock', on);
     if (!on && document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function () { /* already out */ });
     const full = $('#jamFull');
-    if (full) full.hidden = !on || !S.root || !S.root.requestFullscreen;
+    if (full) full.hidden = !on || !document.documentElement.requestFullscreen;
     const rep = $('#jamReport');
     if (rep) rep.hidden = !on;
-    // With the 3D guitar, the camera picture is drawn into the guitar's own canvas and the <video> itself is
-    // not shown, so the window is one small canvas (plus a thin overlay) instead of three full-size layers
-    S.root.classList.toggle('jam--one', on && !!S.view);
-    if (S.view) S.view.setVideo(on ? S.video : null);
-    if (on) S.scrollY = window.scrollY;
-    else {                                         // the rest of the page comes back: put the scroll where it was and let the app re-measure
+    if (!on) {                                     // the rest of the page comes back: put the scroll where it was and let the app re-measure
       window.scrollTo(0, S.scrollY || 0);
       window.dispatchEvent(new Event('resize'));
     }
     size();
     kick();
   }
+  /* Solo: while the camera is on, the page is one opaque canvas (camera picture, guitar and overlay all drawn
+     into it) plus the few buttons, and every other part of the page is taken out of the picture altogether.
+     On a laptop with integrated graphics this is the difference between 16 ms and 100 ms for each look of the
+     tracker: anything else the browser has to blend into the window is paid for on the same graphics card. */
+  function enterSolo() {
+    if (S.solo || !S.view) return;
+    const box = document.createElement('div');
+    box.id = 'jamLive'; box.className = 'jam';
+    S.moved = [];
+    [S.gl, $('#jamStart'), $('.jam__opts'), $('#jamStatus')].forEach(function (n) {
+      if (!n) return;
+      const mark = document.createComment('jam');
+      n.parentNode.insertBefore(mark, n); box.appendChild(n); S.moved.push([n, mark]);
+    });
+    box.addEventListener('click', onClick);
+    document.body.style.minHeight = document.documentElement.scrollHeight + 'px';   // keep the page's length, so its scroll position survives
+    document.body.appendChild(box);
+    S.solo = box;
+    document.body.classList.remove('jam-live');
+    document.body.classList.add('jam-solo');
+    S.view.setVideo(S.video);
+  }
+  function leaveSolo() {
+    const box = S.solo;
+    if (!box) return;
+    S.moved.forEach(function (m) { if (m[1].parentNode) { m[1].parentNode.insertBefore(m[0], m[1]); m[1].remove(); } });
+    box.remove();
+    S.solo = null; S.moved = [];
+    document.body.classList.remove('jam-solo');
+    document.body.style.minHeight = '';
+    if (S.view) S.view.setVideo(null);
+  }
   function toggleFullscreen() {
     if (document.fullscreenElement) { if (document.exitFullscreen) document.exitFullscreen(); }
-    else if (S.root && S.root.requestFullscreen) S.root.requestFullscreen().catch(function () { /* not allowed: stay in the window */ });
+    else { const n = S.solo || S.root; if (n && n.requestFullscreen) n.requestFullscreen().catch(function () { /* not allowed: stay in the window */ }); }
   }
 
   /* Low light makes tracking unreliable, so sample the picture now and then (a 32x18 thumbnail, local only) */
   let probe = null;
   function checkLight(now) {
-    if (now - S.lightAt < 1) return;
+    if (now - S.lightAt < 2) return;
     S.lightAt = now;
     try {
       if (!probe) { probe = document.createElement('canvas'); probe.width = 32; probe.height = 18; }
@@ -561,7 +594,7 @@
     // How many canvas pixels to draw. Off camera: sharp (up to 1.5x). With the camera on: a fixed budget of at
     // most 1280 across (less if tracking is struggling), stretched over the window. A full-window canvas at a
     // high-density screen's own resolution is several times the work for no visible gain behind a webcam picture.
-    const r = $('#jamStage').getBoundingClientRect();
+    const r = (S.solo || $('#jamStage')).getBoundingClientRect();
     if (!r.width || !r.height) return;
     const dpr = S.live ? Math.min(1, S.budget / r.width) : Math.min(window.devicePixelRatio || 1, 1.5);
     S.canvas.width = Math.round(r.width * dpr); S.canvas.height = Math.round(r.height * dpr);
@@ -710,42 +743,49 @@
     return busy;
   }
 
-  /* One loop: look at a camera frame, then draw. It sleeps when nothing is moving.
-     How often to look: 20 times a second at most, less often if a look takes long, and 10 times a second
-     while no hands are in view. The tracker shares the graphics card with everything the page draws; if it
-     is driven flat out the card falls behind, every look then takes longer, and within a minute the picture
-     is down to a couple of frames a second. Leaving it room is what keeps the speed steady. */
-  function frame(ts) {
-    S.raf = 0;
-    if (!S.mounted) return;
-    const now = ts / 1000;
-    if (S.lastTs) S.gapMax = Math.max(S.gapMax, ts - S.lastTs);
-    S.lastTs = ts;
-    if (S.camera === 'on' && S.video.readyState >= 2) {
+  /* While the camera is on: a steady tick, 20 times a second. Each tick may look at a camera frame, then draws
+     once. How often to look: 20 times a second at most, less often if a look takes long, and 10 times a
+     second while no hands are in view. The tracker shares the graphics card with everything the page draws;
+     if it is driven flat out the card falls behind, every look then takes longer, and within a minute the
+     picture is down to a couple of frames a second. Leaving it room is what keeps the speed steady. */
+  function tick() {
+    S.timer = 0;
+    if (!S.mounted || S.camera !== 'on') return;
+    const t = performance.now(), now = t / 1000;
+    if (S.lastTs) S.gapMax = Math.max(S.gapMax, t - S.lastTs);
+    S.lastTs = t;
+    if (S.video.readyState >= 2) {
       const idle = now - S.seenAt > 3, every = Math.max(idle ? 100 : 50, Math.min(250, 2.2 * S.ms)) - 5;
-      if (S.landmarker && !TR.busy && S.video.currentTime !== S.lastVideoTime && ts - S.lastDetectTs >= every) {
-        S.lastVideoTime = S.video.currentTime; S.lastDetectTs = ts;
-        S.stamp = Math.max(S.stamp + 1, performance.now());           // the tracker needs strictly increasing times
-        const t0 = performance.now();
+      if (S.landmarker && !TR.busy && S.video.currentTime !== S.lastVideoTime && t - S.lastDetectTs >= every) {
+        S.lastVideoTime = S.video.currentTime; S.lastDetectTs = t;
+        S.stamp = Math.max(S.stamp + 1, t);                             // the tracker needs strictly increasing times
         let res = null;
         try { res = S.landmarker.detectForVideo(S.video, S.stamp); } catch (e) { res = null; }
-        onHands(res && res.landmarks ? res.landmarks : [], performance.now() - t0);
+        onHands(res && res.landmarks ? res.landmarks : [], performance.now() - t);
       }
-      checkLight(now);
+      if (now - S.seenAt > 1.5) checkLight(now); else S.lowLight = false;   // only worth a look when no hands are being found
       updateStatus(now);
       sample(now);
     }
-    // Draw when there is something new: a tracked frame, or (camera off) at most ~60 times a second while things move
+    const fresh = S.fresh, d0 = performance.now();
+    S.fresh = false;
+    S.busy = draw(now, Math.min(0.1, S.lastDrawTs ? (t - S.lastDrawTs) / 1000 : 0.05));
+    S.drawMs = S.drawMs * 0.9 + (performance.now() - d0) * 0.1;
+    S.lastDrawTs = t;
+    if (fresh) tune(now);
+    S.next = Math.max(S.next + 50, performance.now() + 4);
+    S.timer = setTimeout(tick, S.next - performance.now());
+  }
+  /* With the camera off: draw on animation frames, only while something is moving */
+  function frame(ts) {
+    S.raf = 0;
+    if (!S.mounted || S.camera === 'on') return;
     const since = ts - S.lastDrawTs;
-    if (S.fresh || since >= (S.camera === 'on' ? 30 : 15)) {     // camera on: about 30 a second, so the picture stays fluid between looks
-      const fresh = S.fresh, d0 = performance.now();
-      S.fresh = false;
-      S.busy = draw(now, Math.min(0.1, S.lastDrawTs ? since / 1000 : 0.016));
-      S.drawMs = S.drawMs * 0.9 + (performance.now() - d0) * 0.1;
+    if (since >= 15) {
+      S.busy = draw(ts / 1000, Math.min(0.1, S.lastDrawTs ? since / 1000 : 0.016));
       S.lastDrawTs = ts;
-      if (fresh) tune(now);
     }
-    if (S.camera === 'on' || S.busy) kick(); else { S.lastDrawTs = 0; S.lastTs = 0; }
+    if (S.busy) kick(); else S.lastDrawTs = 0;
   }
   /* If looks stay slow while hands are in view, draw with fewer pixels to leave the graphics card more room */
   function tune(now) {
@@ -786,12 +826,16 @@
     if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
     else done(false);
   }
-  function kick() { if (S.mounted && !S.raf) S.raf = requestAnimationFrame(frame); }
+  function kick() {
+    if (!S.mounted) return;
+    if (S.camera === 'on') { if (!S.timer) { S.next = performance.now(); S.timer = setTimeout(tick, 0); } }
+    else if (!S.raf) S.raf = requestAnimationFrame(frame);
+  }
 
   /* =====================================================================
      Page: markup, buttons, keys, status
      ===================================================================== */
-  const $ = function (sel) { return S.root ? S.root.querySelector(sel) : null; };
+  const $ = function (sel) { return (S.root && S.root.querySelector(sel)) || (S.solo && S.solo.querySelector(sel)) || null; };
 
   function html() {
     return '<section class="jam" id="jam">' +
@@ -961,7 +1005,7 @@
           S.view.setType(S.guitar);
           S.view.setOverlay(S.canvas);
           S.root.classList.add('jam--3d');           // the 2D canvas is now drawn inside the 3D one, not shown itself
-          if (S.live) { S.root.classList.add('jam--one'); S.view.setVideo(S.video); }
+          if (S.live) enterSolo();
           size();
         } catch (e) { S.view = null; }
         kick();
