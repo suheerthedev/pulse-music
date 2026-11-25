@@ -104,7 +104,6 @@ js/audio.js     Web Audio synth engine and song generator
 js/app.js       views and router, player, likes, scroll journey and 3D aisle
 js/airjam.js    Air Jam: hand tracking, gestures, Karplus-Strong guitar, fallback controls
 js/guitar3d.js  Air Jam: the two 3D guitars (three.js, built from code)
-js/jam-worker.js  Air Jam: hand tracking on its own thread
 ```
 
 ## Design decisions
@@ -168,14 +167,15 @@ Air Jam checks (headless Chrome):
 - Gesture logic with scripted hand positions: five chord columns, fast down and up strokes anywhere in the
   picture, slow drift ignored, a hand that drops out mid-stroke, tight fist mutes but a loose grip does not,
   one hand only, left-handed mode.
-- Speed, and staying fast: hand tracking runs on its own thread (`js/jam-worker.js`), so it cannot hold up
-  drawing or sound; frames are only sent when the tracker is free, at most 30 a second, less often when a look
-  takes long, and 10 a second while no hands are in view. The tracker is timed at the start (graphics card
-  against processor, the faster is kept) and watched afterwards: if it becomes much slower than it was, it is
-  restarted from scratch on the other one. The page redraws once per tracked frame, uses fewer pixels while the
-  camera is on, and removes finished notes from the audio graph. Tested: the thread, the main-thread fallback,
-  the switch between graphics card and processor, and a forced slowdown that the watchdog recovered from.
-  A **Speed report** button (shown while the camera is on) copies a timing log for diagnosing a slow machine.
+- Speed, and staying fast. Measured on a laptop with integrated graphics and a high-density screen, where the
+  first versions fell to 2 frames a second after about half a minute: the hand tracker and the page share the
+  graphics card, and driven flat out it falls further and further behind. What fixed it there: while the camera
+  is on, the camera picture and the guitar are drawn into one canvas of at most 1280 pixels across, stretched
+  over the window, and nothing else on the page is drawn at all; the tracker looks at most 20 times a second,
+  less often when a look takes long, and 10 times a second while no hands are in view. Tracking stays on the
+  main thread on the graphics card (15 to 20 ms a look on that laptop, against about 50 ms on the processor and
+  50 to 150 ms from a worker thread). Finished notes are removed from the audio graph. A **Speed report** button
+  (shown while the camera is on) copies a timing log for diagnosing a slow machine.
 - The real tracker, fed test clips of hands through a fake camera: model loads, skeleton lines up with the
   mirrored picture, chord follows the still hand, strums follow the moving hand, camera released on Stop.
 - Camera blocked, no camera, and tracker download failure each show their message and leave the fallback working.

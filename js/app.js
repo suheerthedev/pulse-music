@@ -855,7 +855,10 @@
     J.raf = 0;
     const y = window.pageYOffset || 0, reduce = reduceMotion.matches, last = AISLE.length - 1;
     const inJ = y < appTop() - J.vh * 0.45;
-    if (inJ !== J.inJ) { J.inJ = inJ; document.body.classList.toggle('in-journey', inJ); el.player.inert = inJ; }
+    if (inJ !== J.inJ) {
+      J.inJ = inJ; document.body.classList.toggle('in-journey', inJ); el.player.inert = inJ;
+      if (inJ && J.zone === 'stack' && !driftRaf) { driftAt = 0; driftRaf = requestAnimationFrame(driftLoop); }
+    }
     if (y > J.end + J.vh * 1.15) return;   // deep in the app: nothing to draw
     let p = clamp(y / J.lead, 0, 1), q = clamp((y - J.lead) / J.unit, 0, last);
     let s = clamp((y - J.stops[AISLE.length]) / J.unit, 0, 1);                       // camera swing to the side view
@@ -946,7 +949,7 @@
   }
   function driftLoop(now) {
     driftRaf = 0;
-    if (J.zone !== 'stack' || reduceMotion.matches) return;
+    if (J.zone !== 'stack' || !J.inJ || reduceMotion.matches) return;   // not while the app is on screen: it would redraw 42 records a frame for nobody
     if (driftAt && !J.hold && !tween.on) J.drift += Math.min(0.1, (now - driftAt) / 1000) * 0.4;
     driftAt = now;
     layoutStack();

@@ -224,7 +224,8 @@
 
   /* ------------------------------------------------------------------ the view */
   function create(canvas) {
-    const renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true, powerPreference: 'high-performance' });
+    const renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+    renderer.autoClear = false;
     renderer.setClearColor(0x000000, 0);
     renderer.toneMapping = THREE.NeutralToneMapping || THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.1;
@@ -260,7 +261,26 @@
 
     const root = new THREE.Group();
     scene.add(root);
-    const st = { type: '', model: null, chord: -1, frets: null, aspect: 4 / 3, w: 0, h: 0, posed: false, ratio: 1.5,
+
+    /* The camera picture can be drawn into this same canvas, behind the guitar. One small canvas stretched
+       over the window is far less work for the graphics card than a full-size video with canvases on top. */
+    const bgScene = new THREE.Scene(), bgCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    let bgTex = null, bgMesh = null, bgVideo = null;
+    function fitVideo() {
+      if (!bgTex || !bgVideo || !bgVideo.videoWidth) return;
+      const va = bgVideo.videoWidth / bgVideo.videoHeight, rx = Math.min(1, st.aspect / va), ry = Math.min(1, va / st.aspect);
+      bgTex.repeat.set(-rx, ry); bgTex.offset.set((1 + rx) / 2, (1 - ry) / 2);      // fill the picture, mirrored
+    }
+    function setVideo(video) {
+      if (bgMesh) { bgScene.remove(bgMesh); bgMesh.geometry.dispose(); bgMesh.material.dispose(); bgTex.dispose(); bgMesh = bgTex = bgVideo = null; }
+      if (!video) return;
+      bgVideo = video;
+      bgTex = new THREE.VideoTexture(video); bgTex.colorSpace = THREE.SRGBColorSpace;
+      bgMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ map: bgTex, color: 0xE2E2E2, depthTest: false, depthWrite: false, toneMapped: false }));
+      bgScene.add(bgMesh);
+      fitVideo();
+    }
+    const st = { type: '', model: null, chord: -1, frets: null, aspect: 4 / 3, w: 0, h: 0, posed: false, ratio: 1,
       p: { x: 0.66, y: 0.52, ux: 1, uy: 0.12, L: 0.8, lefty: false } };
     const v = new THREE.Vector3();
 
@@ -317,10 +337,11 @@
       const r = canvas.getBoundingClientRect();
       if (!r.width || !r.height) return;
       st.w = r.width; st.h = r.height; st.aspect = r.width / r.height;
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, st.ratio));
-      renderer.setSize(r.width, r.height, false);
+      renderer.setPixelRatio(1);
+      renderer.setSize(Math.max(2, Math.round(r.width * st.ratio)), Math.max(2, Math.round(r.height * st.ratio)), false);
       camera.aspect = st.aspect; camera.updateProjectionMatrix();
       st.posed = false;
+      fitVideo();
     }
 
     /* amps: how hard each string is ringing right now (0 = still). calm: skip the movement, keep the glow */
@@ -334,6 +355,8 @@
         s.mesh.scale.x = fat; s.mesh.scale.z = fat;
         s.mesh.position.y = s.base.y + (calm ? 0 : Math.sin(now * (70 + i * 11)) * a * 0.0035);
       });
+      renderer.clear();
+      if (bgMesh) { fitVideo(); renderer.render(bgScene, bgCam); renderer.clearDepth(); }
       renderer.render(scene, camera);
     }
 
@@ -348,13 +371,14 @@
     }
 
     return {
-      setType: setType, update: update, setPose: setPose, resize: resize, render: render, labels: labels,
+      setType: setType, update: update, setPose: setPose, setVideo: setVideo, resize: resize, render: render, labels: labels,
       type: function () { return st.type; },
       /* Sizes the hand logic needs, in scale lengths: where the guitar starts and ends, and the chord zones on the neck */
       extents: function () { const m = st.model; return { xMin: m.xMin, xMax: m.xMax, bodyHalf: m.spec.bodyHalf, pick: PICK, z0: m.z0, zw: m.zw }; },
-      /* Fewer pixels = less work for the graphics card */
+      /* How many canvas pixels per page pixel: fewer = less work for the graphics card */
       setRatio: function (r) { if (r !== st.ratio) { st.ratio = r; resize(); } },
       dispose: function () {
+        setVideo(null);
         if (st.model) dispose(st.model.group);
         if (scene.environment) scene.environment.dispose();
         renderer.dispose();
