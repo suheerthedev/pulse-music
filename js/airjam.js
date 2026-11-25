@@ -39,6 +39,9 @@
 
   const clamp = function (v, a, b) { return Math.max(a, Math.min(b, v)); };
   const FLAT_EDGES = [0, 1, 2, 3, 4, 5].map(function (i) { return ZONE.x0 + i * (ZONE.x1 - ZONE.x0) / 5; });
+  const EXT = { xMin: -0.27, xMax: 1.335, bodyHalf: 0.3, pick: 0.88, z0: -0.03, zw: 0.146 };   // guitar sizes until the model reports its own
+  const ext = function () { return S.view ? S.view.extents() : EXT; };
+  const turn = function (a, b) { let d = a - b; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; };
   const saved = function (key, value) {
     try { if (value === undefined) return window.localStorage.getItem('pulse:' + key); window.localStorage.setItem('pulse:' + key, value); } catch (e) { /* private mode */ }
     return null;
@@ -50,19 +53,21 @@
     chord: 0, muted: false, padMute: false, dist: false, lefty: false,
     guitar: 'acoustic',       // acoustic | electric
     view: null, viewToken: 0, gl: null,       // the 3D guitar, when three.js is available
-    edges: null, split: SPLIT, strumAt: null, // chord zone edges and strum point, measured on the guitar
+    strumAt: null,                            // where the strumming spot is on screen (for sparks)
+    pose: null, poseT: 0, heldAt: -9, lastFret: null, handSize: 0,   // where the guitar is: it follows the hands
+    lastDrawTs: 0, lastDetectTs: 0, busy: false, slowFor: 0, ratio: 1.5, fpsBest: 0, sagFor: 0, rebenchAt: 0,
     fit: { sx: 1, ox: 0, sy: 1, oy: 0 },      // how the camera picture is scaled to cover the stage
     live: false,
     camera: 'off',            // off | starting | loading | on | error
     error: '', aspect: 1.33, stream: null, landmarker: null, raf: 0, lastVideoTime: -1, stamp: 0,
     hands: { fret: null, strum: null },       // smoothed landmark sets
     seenAt: 0, lowLight: false, lightAt: 0,
-    strumY: null, strumT: 0, strumV: 0, lastStrumAt: 0, lastDir: -1,
+    strumX: 0, strumY: null, strumT: 0, strumV: 0, lastStrumAt: 0, lastDir: -1,
     fistFrames: 0, openFrames: 0, lone: null, wantChord: -1,
     stroke: { dir: 0, travel: 0, fired: false }, lineY: STRUM.y,
     ms: 0, fps: 0, lastDetectAt: 0, delegate: '', bench: null,
     strings: [0, 1, 2, 3, 4, 5].map(function () { return { amp: 0, t0: 0 }; }),
-    particles: [], strums: 0, last: null, status: ''
+    particles: [], strums: 0, last: null, status: '', pr: 1
   };
   if (saved('jam-guitar') === 'electric') S.guitar = 'electric';
 
@@ -182,7 +187,7 @@
     vel = clamp(vel, 0.15, 1);
     const t = ctx.currentTime + 0.01, stagger = 0.03 - 0.02 * vel;
     const tone = ctx.createBiquadFilter(); tone.type = 'lowpass'; tone.frequency.value = 1500 + vel * 5500; tone.connect(A.input);
-    let k = 0;
+    let k = 0, ringing = 0;
     for (let n = 0; n < 6; n++) {
       const s = dir > 0 ? n : 5 - n, fret = chord.frets[s];
       if (fret < 0) continue;
@@ -191,6 +196,11 @@
       if (old) { old.g.gain.setTargetAtTime(0, when, 0.008); try { old.src.stop(when + 0.1); } catch (e) { /* already stopped */ } }
       const src = ctx.createBufferSource(); src.buffer = A.bufs[TUNING[s] + fret];
       const g = ctx.createGain();
+      ringing++;
+      src.onended = function () {                  // take finished notes out of the audio graph so it never piles up
+        try { src.disconnect(); g.disconnect(); } catch (e) { /* already gone */ }
+        if (--ringing === 0) { try { tone.disconnect(); } catch (e) { /* already gone */ } }
+      };
       g.gain.setValueAtTime(vel * 0.5, when);
       if (muted) g.gain.setTargetAtTime(0, when + 0.02, 0.03);      // palm mute: just the percussive "chk"
       src.connect(g); g.connect(tone);
@@ -239,10 +249,55 @@
   }
 
   /* raw: array of hands, each 21 landmarks {x, y} in camera coordinates. now: seconds. */
+  /* Where the guitar sits when nobody is holding it: centred, neck up a little, sized to the picture */
+  function restPose() {
+    const e = ext(), ang = 0.12;
+    const L = Math.min(0.93 * S.aspect / (e.xMax - e.xMin), 0.56 / (2 * e.bodyHalf), 0.95);
+    const off = (e.pick - (e.xMin + e.xMax) / 2) * L;
+    return { x: 0.5 + off * Math.cos(ang) / S.aspect, y: 0.52 + off * Math.sin(ang), ang: ang, L: L };
+  }
+  const handSpan = function (h) {                 // palm length or palm width, whichever is less foreshortened
+    const d = function (a, b) { return Math.hypot((h[a].x - h[b].x) * S.aspect, h[a].y - h[b].y); };
+    return Math.max(d(0, 9), 1.25 * d(5, 17));
+  };
+
+  /* The guitar is held by the two hands. Its body sits at the strumming hand, its neck points at the chord hand,
+     and its size comes from the size of the hands, so it looks the same size as the player would hold.
+     P.x, P.y: the strumming spot on the strings (0..1 across and down). P.ang: which way the strings run on screen.
+     P.L: the scale length in picture heights. All in "layout" coordinates (left-handed mode is mirrored later). */
+  function holdGuitar(now) {
+    if (!S.pose) S.pose = restPose();
+    const P = S.pose, asp = S.aspect, dt = clamp(now - S.poseT, 0.001, 0.25);
+    S.poseT = now;
+    const ease = function (tau) { return 1 - Math.exp(-dt / tau); };
+    let ux = Math.cos(P.ang), uy = Math.sin(P.ang);
+    if (S.hands.strum) {
+      // The body follows the strumming hand, but not its strokes: across the strings the hand may travel
+      // a stroke's width either way before the guitar moves at all, so strumming does not shake it
+      const c = palm(S.hands.strum), ex = (c.x - P.x) * asp, ey = c.y - P.y;
+      const slack = function (v, z) { return v > z ? v - z : v < -z ? v + z : 0; };
+      const along = slack(ex * ux + ey * uy, 0.03 * P.L) * ease(0.3), across = slack(-ex * uy + ey * ux, 0.11 * P.L) * ease(0.6);
+      P.x += (along * ux - across * uy) / asp; P.y += along * uy + across * ux;
+    }
+    if (S.hands.fret) {
+      const c = palm(S.hands.fret), dx = (P.x - c.x) * asp, dy = P.y - c.y;
+      if (Math.hypot(dx, dy) > 0.18 * P.L) P.ang += turn(clamp(Math.atan2(dy, dx), -1.25, 1.25), P.ang) * ease(0.12);
+      S.lastFret = { x: c.x, y: c.y };
+    }
+    // Size: follow the biggest hand span seen lately (a flat hand); shrink only very slowly
+    let span = 0;
+    if (S.hands.fret) span = handSpan(S.hands.fret);
+    if (S.hands.strum) span = Math.max(span, handSpan(S.hands.strum));
+    if (span > S.handSize) S.handSize += (span - S.handSize) * ease(0.4); else S.handSize *= Math.exp(-dt / 45);
+    if (S.handSize > 0.02) P.L += (clamp(5.4 * S.handSize, 0.5, 1.2) - P.L) * ease(0.5);
+    S.heldAt = now;
+  }
+
+  /* raw: array of hands, each 21 landmarks {x, y} in camera coordinates. now: seconds. */
   function processHands(raw, now) {
     // Mirror so the picture behaves like a mirror, follow the way the picture is cropped to fill the stage,
     // then flip again for left-handed players
-    const f = S.fit;
+    const f = S.fit, held = !!S.view, asp = S.aspect;
     const hands = raw.map(function (h) {
       return h.map(function (p) { const x = f.ox + (1 - p.x) * f.sx; return { x: S.lefty ? 1 - x : x, y: f.oy + p.y * f.sy }; });
     });
@@ -255,9 +310,17 @@
       const a = hands[0], b = hands[1];
       if (palm(a).x <= palm(b).x) { fret = a; strumHand = b; } else { fret = b; strumHand = a; }
     } else if (hands.length === 1) {
-      // A lone hand keeps the job it had until it is clearly on the other side
-      const x = palm(hands[0]).x, edge = S.lone === 'fret' ? S.split + 0.06 : S.lone === 'strum' ? S.split - 0.06 : S.split;
-      S.lone = x < edge ? 'fret' : 'strum';
+      const c = palm(hands[0]);
+      if (held) {
+        // A lone hand takes whichever job it is nearer to: the body (strum) or where the chord hand last was
+        const P = S.pose || restPose(), ds = Math.hypot((c.x - P.x) * asp, c.y - P.y);
+        const df = S.lastFret ? Math.hypot((c.x - S.lastFret.x) * asp, c.y - S.lastFret.y) : (ds < 0.2 * P.L ? 9 : 0);
+        S.lone = ds <= df ? 'strum' : 'fret';
+      } else {
+        // Flat picture: a lone hand keeps the job it had until it is clearly on the other side
+        const edge = S.lone === 'fret' ? SPLIT + 0.06 : S.lone === 'strum' ? SPLIT - 0.06 : SPLIT;
+        S.lone = c.x < edge ? 'fret' : 'strum';
+      }
       if (S.lone === 'fret') fret = hands[0]; else strumHand = hands[0];
     } else {
       S.lone = null;
@@ -265,16 +328,25 @@
     if (hands.length) S.seenAt = now;
     S.hands.fret = fret ? smoothHand(S.hands.fret, fret) : null;
     S.hands.strum = strumHand ? smoothHand(S.hands.strum, strumHand) : null;
+    if (held && hands.length) holdGuitar(now);
+    const P = held ? (S.pose || (S.pose = restPose())) : null;
+    const ux = P ? Math.cos(P.ang) : 1, uy = P ? Math.sin(P.ang) : 0;   // which way the strings run
 
-    // Chord hand: which zone of the neck is the palm over? A little hysteresis stops flicker on the borders.
+    // Chord hand: how far along the neck is the palm? A little hysteresis stops flicker on the borders.
     if (S.hands.fret) {
-      const p = palm(S.hands.fret), e = S.edges || FLAT_EDGES, cur = S.chord;
+      const p = palm(S.hands.fret), cur = S.chord;
       let pos;
-      if (p.x < e[0]) pos = (p.x - e[0]) / (e[1] - e[0]);
-      else if (p.x >= e[5]) pos = 5 + (p.x - e[5]) / (e[5] - e[4]);
-      else { let i = 0; while (i < 4 && p.x >= e[i + 1]) i++; pos = i + (p.x - e[i]) / (e[i + 1] - e[i]); }
+      if (P) {
+        const e = ext(), along = ((P.x - p.x) * asp) * ux + (P.y - p.y) * uy;   // distance from the strumming spot, along the strings
+        pos = (e.pick - along / P.L - e.z0) / e.zw;
+      } else {
+        const e = FLAT_EDGES;
+        if (p.x < e[0]) pos = (p.x - e[0]) / (e[1] - e[0]);
+        else if (p.x >= e[5]) pos = 5 + (p.x - e[5]) / (e[5] - e[4]);
+        else { let i = 0; while (i < 4 && p.x >= e[i + 1]) i++; pos = i + (p.x - e[i]) / (e[i + 1] - e[i]); }
+      }
       const want = (pos < cur - 0.12 || pos > cur + 1.12) ? clamp(Math.floor(pos), 0, CHORDS.length - 1) : cur;
-      // ...and a new column has to show up in two frames running, so a one-frame glitch cannot change the chord
+      // ...and a new zone has to show up in two frames running, so a one-frame glitch cannot change the chord
       if (want !== cur && want === S.wantChord) setChord(want);
       S.wantChord = want;
       if (isFist(S.hands.fret)) { S.fistFrames++; S.openFrames = 0; } else { S.openFrames++; S.fistFrames = 0; }
@@ -284,12 +356,12 @@
       S.muted = false; syncPads();
     }
 
-    // Strum hand: any fast stroke down or up plays, wherever the hand is. One strum per stroke.
-    // The drawn strings follow the hand, so the stroke always passes across them.
+    // Strum hand: any fast stroke across the strings plays, wherever the hand is. One strum per stroke.
+    // "Across" follows the guitar: with the neck tilted, a stroke at right angles to it still counts in full.
     if (S.hands.strum) {
       const p = centre(S.hands.strum);
       if (S.strumY !== null && now > S.strumT && now - S.strumT < 0.4) {
-        const dy = p.y - S.strumY, v = dy / (now - S.strumT);             // frame heights per second
+        const dy = -(p.x - S.strumX) * asp * uy + (p.y - S.strumY) * ux, v = dy / (now - S.strumT);   // picture heights per second
         S.strumV = S.strumV * 0.4 + v * 0.6;
         const dir = v > 0.25 ? 1 : v < -0.25 ? -1 : 0, k = S.stroke;
         if (!dir) { k.dir = 0; k.travel = 0; k.fired = false; }
@@ -298,11 +370,12 @@
         const speed = Math.max(Math.abs(S.strumV), Math.abs(v) * 0.8);
         if (dir && !k.fired && k.travel >= 0.05 && speed > 0.6 && now - S.lastStrumAt > 0.09) {
           k.fired = true; S.lastStrumAt = now;
-          strum(dir, (speed - 0.5) / 2.4, { x: clamp(palm(S.hands.strum).x, STRUM.x0, STRUM.x1), y: p.y });
+          const c = palm(S.hands.strum);
+          strum(dir, (speed - 0.5) / 2.4, { x: held ? c.x : clamp(c.x, STRUM.x0, STRUM.x1), y: p.y });
         }
-        S.lineY += (clamp(p.y, 0.2, 0.8) - S.lineY) * Math.min(1, (now - S.strumT) / 1.2);   // strings drift to where the hand plays
+        S.lineY += (clamp(p.y, 0.2, 0.8) - S.lineY) * Math.min(1, (now - S.strumT) / 1.2);   // flat picture: strings drift to the hand
       }
-      S.strumY = p.y; S.strumT = now;
+      S.strumX = p.x; S.strumY = p.y; S.strumT = now;
     } else if (S.strumY !== null && now - S.strumT > 0.4) {
       // Fast hands blur and drop out for a frame or two: only forget the stroke after a real pause
       S.strumY = null; S.strumV = 0; S.stroke.dir = 0; S.stroke.travel = 0; S.stroke.fired = false;
@@ -352,7 +425,7 @@
     const avg = b.sum / (b.n - 3);
     if (!b.first) {
       const other = CFG.delegates.filter(function (d) { return b.tried.indexOf(d) < 0; })[0];
-      if (avg < 45 || !other) { b.done = true; return; }
+      if (avg < (b.limit === undefined ? 45 : b.limit) || !other) { b.done = true; return; }
       b.busy = true;
       makeTracker(other).then(function (lm) {
         if (!S.landmarker || S.camera !== 'on') { lm.close(); b.done = true; return; }
@@ -418,6 +491,7 @@
     S.stream = null;
     if (S.video) S.video.srcObject = null;
     S.hands.fret = S.hands.strum = null; S.strumY = null; S.muted = false; S.lowLight = false; S.fps = 0; S.lineY = STRUM.y;
+    S.heldAt = -9; S.lastFret = null; S.handSize = 0; S.lastDetectAt = 0; S.fpsBest = 0; S.sagFor = 0;
     setLive(false);
     if (S.camera !== 'error') setCamera('off');
   }
@@ -432,6 +506,7 @@
     if (!on && document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(function () { /* already out */ });
     const full = $('#jamFull');
     if (full) full.hidden = !on || !S.root || !S.root.requestFullscreen;
+    S.ratio = on ? 1 : 1.5; S.slowFor = 0;
     size();
     kick();
   }
@@ -461,16 +536,18 @@
      ===================================================================== */
   function size() {
     if (!S.canvas) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.5), r = S.canvas.getBoundingClientRect();
+    // Full-window drawing on a high-density screen is a lot of pixels every frame: keep it lean while the camera runs
+    const dpr = Math.min(window.devicePixelRatio || 1, S.live ? 1 : 1.5), r = S.canvas.getBoundingClientRect();
     if (!r.width || !r.height) return;
     S.canvas.width = Math.round(r.width * dpr); S.canvas.height = Math.round(r.height * dpr);
+    S.pr = dpr;
     S.aspect = r.width / r.height;
     const vw = S.video ? S.video.videoWidth : 0, vh = S.video ? S.video.videoHeight : 0;
     if (vw && vh) {                                  // the video covers the stage, so part of it may be cropped
       const k = Math.max(r.width / vw, r.height / vh), dw = vw * k / r.width, dh = vh * k / r.height;
       S.fit = { sx: dw, ox: (1 - dw) / 2, sy: dh, oy: (1 - dh) / 2 };
     } else S.fit = { sx: 1, ox: 0, sy: 1, oy: 0 };
-    if (S.view) S.view.resize();
+    if (S.view) { S.view.setRatio(S.ratio); S.view.resize(); }
   }
   const fx = function (x) { return S.lefty ? 1 - x : x; };   // layout x -> screen x
 
@@ -501,14 +578,22 @@
     g.textAlign = 'center';
     const view = S.view;
     if (view) {
-      // The 3D guitar: it draws itself; here we add the chord names under the neck
-      view.update({ chord: S.chord, frets: CHORDS[S.chord].frets, lefty: S.lefty, y: S.lineY });
+      // The 3D guitar draws itself; here we say where it is and add the chord names along the neck
+      if (!S.pose) S.pose = restPose();
+      const P = S.pose;
+      if (nowSec - S.heldAt > 1.5) {                 // nobody is holding it: float back to the middle
+        const R = restPose(), k = 1 - Math.exp(-dt / 0.45);
+        P.x += (R.x - P.x) * k; P.y += (R.y - P.y) * k; P.ang += turn(R.ang, P.ang) * k; P.L += (R.L - P.L) * k;
+        if (Math.abs(R.x - P.x) + Math.abs(R.y - P.y) + Math.abs(R.L - P.L) + Math.abs(turn(R.ang, P.ang)) > 0.002) busy = true;
+        S.lastFret = null; S.handSize = 0;
+      }
+      const cs = Math.cos(P.ang);
+      view.setPose({ x: fx(P.x), y: P.y, ux: S.lefty ? -cs : cs, uy: Math.sin(P.ang), L: P.L, lefty: S.lefty });
+      view.update({ chord: S.chord, frets: CHORDS[S.chord].frets });
       view.render(nowSec, amps, reduceMotion.matches);
-      S.edges = view.zones().map(function (x) { return S.lefty ? 1 - x : x; });
-      S.split = S.edges[5] + 0.035;
       const L = view.labels();
       S.strumAt = { x: S.lefty ? 1 - L.strum.x : L.strum.x, y: L.strum.y };
-      const zpx = Math.abs(S.edges[1] - S.edges[0]) * W;                 // names shrink with the neck on narrow screens
+      const zpx = ext().zw * P.L * H;                // names shrink with the neck when the guitar is small
       CHORDS.forEach(function (ch, i) {
         const p = L.zones[i], on = i === S.chord;
         g.fillStyle = on ? '#FFFFFF' : 'rgba(241, 246, 252, .92)';
@@ -521,7 +606,7 @@
       g.fillStyle = 'rgba(241, 246, 252, .95)'; g.font = 13 * u + 'px Michroma, sans-serif';
       label(S.muted || S.padMute ? 'Muted' : 'Strum hand', clamp(L.tag.x * W, 70 * u, W - 70 * u), clamp(L.tag.y * H, 20 * u, H - 12 * u));
     } else {
-    S.edges = null; S.split = SPLIT; S.strumAt = null;
+    S.strumAt = null;
     // Chord zones
     const zw = (ZONE.x1 - ZONE.x0) / CHORDS.length;
     CHORDS.forEach(function (ch, i) {
@@ -562,7 +647,7 @@
     }
     if (S.camera === 'on' && S.fps) {
       g.fillStyle = 'rgba(241, 246, 252, .95)'; g.font = 12 * u + 'px "Hanken Grotesk", sans-serif'; g.textAlign = 'right';
-      label('tracking ' + Math.round(S.fps) + ' fps', W - 14 * u, (S.live ? 80 : 22) * (W / S.canvas.getBoundingClientRect().width));   // under the Stop button
+      label('tracking ' + Math.round(S.fps) + ' fps', W - 14 * u, (S.live ? 80 : 22) * S.pr);   // under the Stop button
       g.textAlign = 'center';
     }
 
@@ -597,16 +682,17 @@
     return busy;
   }
 
-  /* One loop: read a camera frame, track, update gestures, draw. It sleeps when nothing is moving. */
-  let lastFrame = 0;
+  /* One loop: read a camera frame, track, update gestures, draw. It sleeps when nothing is moving,
+     and it never draws more often than there is something new to show (a 120 Hz screen would otherwise
+     redraw the whole window four times for every camera frame, which is what heats a laptop up). */
   function frame(ts) {
     S.raf = 0;
     if (!S.mounted) return;
-    const now = ts / 1000, dt = Math.min(0.05, lastFrame ? now - lastFrame : 0.016);
-    lastFrame = now;
+    const now = ts / 1000;
+    let fresh = false;
     if (S.camera === 'on' && S.landmarker && S.video.readyState >= 2) {
-      if (S.video.currentTime !== S.lastVideoTime) {
-        S.lastVideoTime = S.video.currentTime;
+      if (S.video.currentTime !== S.lastVideoTime && ts - S.lastDetectTs >= 28) {       // at most ~30 looks a second
+        S.lastVideoTime = S.video.currentTime; S.lastDetectTs = ts;
         let res = null;
         S.stamp = Math.max(S.stamp + 1, performance.now());           // the tracker needs strictly increasing times
         const t0 = performance.now();
@@ -618,11 +704,37 @@
         benchmark(t1 - t0);
         processHands(res && res.landmarks ? res.landmarks : [], t1 / 1000);
         checkLight(now);
+        fresh = true;
       }
       updateStatus(now);
     }
-    const busy = draw(now, dt);
-    if (S.camera === 'on' || busy) kick(); else lastFrame = 0;
+    const since = ts - S.lastDrawTs;
+    if (fresh || since >= (S.camera === 'on' ? 70 : 15)) {
+      S.busy = draw(now, Math.min(0.1, S.lastDrawTs ? since / 1000 : 0.016));
+      S.lastDrawTs = ts;
+      if (fresh) tune();
+    }
+    if (S.camera === 'on' || S.busy) kick(); else S.lastDrawTs = 0;
+  }
+  /* If tracking stays slow, draw the guitar with fewer pixels to give the tracker more room */
+  function tune() {
+    if (!S.fps || !S.live) return;
+    if (S.fps < 19) S.slowFor++; else if (S.slowFor > 0) S.slowFor--;
+    if (S.view && S.slowFor > 75 && S.ratio > 0.6) {
+      S.ratio = S.ratio > 0.75 ? 0.75 : 0.6; S.slowFor = 0;
+      S.view.setRatio(S.ratio);
+    }
+    // If tracking was fast and has since dropped to about half (a laptop getting warm, say), time the
+    // graphics card against the processor again and keep the faster. At most once a minute.
+    const b = S.bench, t = performance.now();
+    if (b && b.done) {
+      S.fpsBest = Math.max(S.fpsBest * 0.9995, S.fps);
+      if (S.fps < 0.55 * S.fpsBest) S.sagFor++; else S.sagFor = 0;
+      if (S.sagFor > 90 && t - S.rebenchAt > 60000 && CFG.delegates.length > 1) {
+        S.rebenchAt = t; S.sagFor = 0; S.fpsBest = 0;
+        S.bench = { n: 0, sum: 0, tried: [S.delegate], first: null, busy: false, limit: 0 };
+      }
+    }
   }
   function kick() { if (S.mounted && !S.raf) S.raf = requestAnimationFrame(frame); }
 
@@ -634,7 +746,7 @@
   function html() {
     return '<section class="jam" id="jam">' +
       '<header class="jam__head"><div><h2 id="viewTitle">Air Jam</h2>' +
-      '<p class="muted">Hold one hand over the guitar’s neck to pick the chord. Flick your other hand down or up over the body, fast, to strum.</p></div>' +
+      '<p class="muted">Hold your hands up as if you had a guitar and it jumps into them. Slide one hand along the neck to change chord; flick the other across the strings, fast, to strum.</p></div>' +
       '<button type="button" class="bubble bubble--pink" id="jamStart">Start camera</button></header>' +
       '<div class="jam__stage" id="jamStage"><video id="jamVideo" playsinline muted aria-hidden="true"></video>' +
       '<canvas id="jamGL" aria-hidden="true"></canvas><canvas id="jamCanvas" aria-hidden="true"></canvas>' +
@@ -661,8 +773,9 @@
       '</div>' +
       '<section class="about jam__how"><h3>How it works</h3><ol>' +
         '<li><b>Guitar.</b> Pick the acoustic or the electric. Each is a 3D model built in code, and each has its own sound; the electric adds a distortion switch.</li>' +
-        '<li><b>Chord hand.</b> Hold one hand up over the neck. The neck is split into five zones, and the one your palm is over sets the chord: ' + CHORDS.map(function (c) { return c.name; }).join(', ') + '. The dots on the frets show how that chord is really fingered.</li>' +
-        '<li><b>Strum hand.</b> Over the body, flick your other hand quickly down or up, like hitting strings. Any fast stroke plays, wherever your hand is; slow moves are ignored. A faster stroke is louder and brighter.</li>' +
+        '<li><b>Holding it.</b> With the camera on, the guitar sits in your hands: its body at your strumming hand, its neck pointing at your other hand, sized from the size of your hands. Move, lean or tilt and it comes with you.</li>' +
+        '<li><b>Chord hand.</b> Slide your other hand along the neck, closer to the body or further out. The neck is split into five zones, and the one your palm is over sets the chord: ' + CHORDS.map(function (c) { return c.name; }).join(', ') + '. The dots on the frets show how that chord is really fingered.</li>' +
+        '<li><b>Strum hand.</b> Flick your strumming hand quickly across the strings, down or up. Any fast stroke plays; slow moves are ignored. A faster stroke is louder and brighter.</li>' +
         '<li><b>Mute.</b> Squeeze your chord hand into a tight fist to stop the strings. Strumming while it is closed gives a muted “chk”.</li>' +
         '<li><b>Sound.</b> Each string is a Karplus-Strong model: a burst of noise looping through a short delay, synthesized live. The acoustic adds the resonance of a hollow body; the electric sounds like a pickup, and its distortion adds a soft-clipping stage and a speaker-style filter.</li>' +
         '<li><b>Privacy.</b> Hand tracking is MediaPipe Hand Landmarker running in your browser. Video stays on your device: nothing is recorded, stored or uploaded.</li>' +
@@ -687,7 +800,7 @@
     setStatus(mode === 'starting' ? 'Asking for the camera…'
       : mode === 'loading' ? 'Loading the hand tracker (a few seconds the first time)…'
       : mode === 'error' ? S.error
-      : mode === 'on' ? 'Camera on. Hold both hands up so the camera can see them.'
+      : mode === 'on' ? 'Camera on. Hold both hands up as if you were holding a guitar.'
       : 'Chord ' + CHORDS[S.chord].name + '. Press Space or Strum to play.');
     kick();
   }
@@ -697,9 +810,9 @@
       : lost ? 'No hands in view. Hold them up, about an arm’s length from the camera.'
       : S.muted ? 'Muted, because your chord hand is a fist. Open it to let the strings ring.'
       : !both && S.hands.fret ? 'Chord ' + CHORDS[S.chord].name + '. Bring in your other hand to strum.'
-      : !both ? 'Strumming ' + CHORDS[S.chord].name + '. Bring in your other hand to change chords.'
+      : !both ? 'Strumming ' + CHORDS[S.chord].name + '. Bring in your other hand to hold the neck and change chords.'
       : S.lowLight ? 'Chord ' + CHORDS[S.chord].name + '. The picture is dark, so tracking may be jumpy.'
-      : 'Chord ' + CHORDS[S.chord].name + '. Flick your strum hand down or up to play.');
+      : 'Chord ' + CHORDS[S.chord].name + '. Flick your strum hand across the strings to play.');
   }
 
   function syncPads() {
@@ -814,7 +927,7 @@
     if (S.ro) { S.ro.disconnect(); S.ro = null; }
     S.viewToken++;
     if (S.view) { try { S.view.dispose(); } catch (e) { /* context already gone */ } S.view = null; }
-    S.edges = null; S.split = SPLIT; S.strumAt = null;
+    S.strumAt = null; S.pose = null;
     S.mounted = false; S.root = null; S.video = null; S.canvas = null; S.g = null; S.gl = null;
   }
   function onResize() { size(); kick(); }
@@ -826,8 +939,14 @@
     html: html, mount: mount, unmount: unmount, handleKey: handleKey,
     // Test hooks: feed synthetic hand landmarks and read the state back
     _feed: function (hands, now) { processHands(hands, now); kick(); },
-    _state: function () { return { chord: CHORDS[S.chord].name, muted: S.muted, padMute: S.padMute, dist: S.dist, lefty: S.lefty, guitar: S.guitar, view: S.view ? S.view.type() : null, live: S.live, edges: S.edges || FLAT_EDGES, split: S.split, fit: S.fit, delegate: S.delegate, ms: Math.round(S.ms), fps: Math.round(S.fps), strums: S.strums, last: S.last, camera: S.camera, status: S.status, notes: Object.keys(A.bufs).length, ctx: A.ctx ? A.ctx.state : 'none' }; },
+    _state: function () { return { chord: CHORDS[S.chord].name, muted: S.muted, padMute: S.padMute, dist: S.dist, lefty: S.lefty, guitar: S.guitar, view: S.view ? S.view.type() : null, live: S.live, edges: FLAT_EDGES, pose: S.pose, ratio: S.ratio, fit: S.fit, delegate: S.delegate, ms: Math.round(S.ms), fps: Math.round(S.fps), strums: S.strums, last: S.last, camera: S.camera, status: S.status, notes: Object.keys(A.bufs).length, ctx: A.ctx ? A.ctx.state : 'none' }; },
     _audio: function () { return A; },
+    // Where the middle of chord zone i is right now, across and down the mirrored picture
+    _zonePoint: function (i) {
+      if (!S.view) return { x: (FLAT_EDGES[i] + FLAT_EDGES[i + 1]) / 2, y: 0.45 };
+      const P = S.pose || (S.pose = restPose()), e = ext(), d = (e.pick - (e.z0 + (i + 0.5) * e.zw)) * P.L;
+      return { x: P.x - Math.cos(P.ang) * d / S.aspect, y: P.y - Math.sin(P.ang) * d };
+    },
     _particles: function () { return S.particles.length; },
     _bench: function () { return S.bench; },
     _hands: function () { return { fret: S.hands.fret ? palm(S.hands.fret) : null, strum: S.hands.strum ? palm(S.hands.strum) : null, v: S.strumV }; }

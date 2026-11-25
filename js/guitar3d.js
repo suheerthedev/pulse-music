@@ -211,7 +211,7 @@
       group: g, strings: strings, zones: zones, dots: dots, spec: sp,
       zoneX: function (i) { return z0 + i * zw; },
       neckW: neckW,
-      xMin: -sp.head, xMax: sp.bodyEnd
+      xMin: -sp.head, xMax: sp.bodyEnd, z0: z0, zw: zw
     };
   }
 
@@ -260,7 +260,8 @@
 
     const root = new THREE.Group();
     scene.add(root);
-    const st = { type: '', model: null, lefty: false, y: 0.56, chord: -1, frets: null, aspect: 4 / 3, w: 0, h: 0, posed: false };
+    const st = { type: '', model: null, chord: -1, frets: null, aspect: 4 / 3, w: 0, h: 0, posed: false, ratio: 1.5,
+      p: { x: 0.66, y: 0.52, ux: 1, uy: 0.12, L: 0.8, lefty: false } };
     const v = new THREE.Vector3();
 
     function setType(type) {
@@ -272,20 +273,27 @@
       st.chord = -1; st.posed = false;
     }
 
-    /* Size the guitar to the picture and put its strings under the strumming hand */
+    /* Place the guitar. p.x, p.y: where the strumming spot on the strings should be, 0..1 across and down the
+       picture. p.ux, p.uy: which way the strings run from nut to bridge on screen (y down). p.L: the scale length,
+       in picture heights. A little fixed tilt keeps it looking solid instead of flat. */
+    const PICK = 0.88;
     function pose() {
-      const m = st.model, dir = st.lefty ? -1 : 1;
-      const L = Math.min(0.93 * 2 * st.aspect / (m.xMax - m.xMin), 1.12 / (2 * m.spec.bodyHalf), 1.9);
+      const p = st.p, dir = p.lefty ? -1 : 1, L = 2 * p.L;
       root.scale.set(L * dir, L, L);
-      root.rotation.set(-0.2, 0.24 * dir, -0.12 * dir);
+      root.rotation.order = 'ZYX';
+      root.rotation.set(-0.2, 0.16 * dir, dir > 0 ? Math.atan2(-p.uy, p.ux) : Math.atan2(p.uy, -p.ux));
       root.position.set(0, 0, 0);
       root.updateMatrixWorld(true);
-      const mid = root.localToWorld(v.set((m.xMin + m.xMax) / 2, 0, 0)), cx = mid.x, cz = mid.z;
-      const pick = root.localToWorld(v.set(0.88, 0, 0)).y;
-      const y = Math.max(0.34, Math.min(0.68, st.y));
-      root.position.set(-cx, (0.5 - y) * 2 - pick, -cz);
+      const w = root.localToWorld(v.set(PICK, 0, 0));
+      root.position.set((p.x - 0.5) * 2 * st.aspect - w.x, (0.5 - p.y) * 2 - w.y, -w.z);
       root.updateMatrixWorld(true);
       st.posed = true;
+    }
+    function setPose(p) {
+      const q = st.p;
+      if (Math.abs(p.x - q.x) + Math.abs(p.y - q.y) + Math.abs(p.ux - q.ux) + Math.abs(p.uy - q.uy) + Math.abs(p.L - q.L) < 0.0004 && p.lefty === q.lefty) return;
+      st.p = { x: p.x, y: p.y, ux: p.ux, uy: p.uy, L: p.L, lefty: p.lefty };
+      st.posed = false;
     }
     function toScreen(x, y, z) {                                        // guitar coordinates -> 0..1 across and down the picture
       root.localToWorld(v.set(x, y, z)).project(camera);
@@ -293,8 +301,6 @@
     }
 
     function update(o) {
-      if (o.lefty !== st.lefty) { st.lefty = o.lefty; st.posed = false; }
-      if (Math.abs(o.y - st.y) > 0.002) { st.y = o.y; st.posed = false; }
       if (o.chord !== st.chord) {
         st.chord = o.chord; st.frets = o.frets;
         const m = st.model;
@@ -311,7 +317,7 @@
       const r = canvas.getBoundingClientRect();
       if (!r.width || !r.height) return;
       st.w = r.width; st.h = r.height; st.aspect = r.width / r.height;
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, st.ratio));
       renderer.setSize(r.width, r.height, false);
       camera.aspect = st.aspect; camera.updateProjectionMatrix();
       st.posed = false;
@@ -331,13 +337,6 @@
       renderer.render(scene, camera);
     }
 
-    /* Where the five chord zones start and end across the picture (six edges), measured on the neck itself */
-    function zones() {
-      if (!st.posed) pose();
-      const out = [];
-      for (let i = 0; i <= 5; i++) out.push(toScreen(st.model.zoneX(i), 0, 0.02).x);
-      return out;
-    }
     function labels() {
       if (!st.posed) pose();
       const m = st.model, out = { zones: [], strum: toScreen(0.9, 0, 0.03), tag: toScreen(1.0, m.spec.bodyHalf + 0.035, 0) };
@@ -349,8 +348,12 @@
     }
 
     return {
-      setType: setType, update: update, resize: resize, render: render, zones: zones, labels: labels,
+      setType: setType, update: update, setPose: setPose, resize: resize, render: render, labels: labels,
       type: function () { return st.type; },
+      /* Sizes the hand logic needs, in scale lengths: where the guitar starts and ends, and the chord zones on the neck */
+      extents: function () { const m = st.model; return { xMin: m.xMin, xMax: m.xMax, bodyHalf: m.spec.bodyHalf, pick: PICK, z0: m.z0, zw: m.zw }; },
+      /* Fewer pixels = less work for the graphics card */
+      setRatio: function (r) { if (r !== st.ratio) { st.ratio = r; resize(); } },
       dispose: function () {
         if (st.model) dispose(st.model.group);
         if (scene.environment) scene.environment.dispose();

@@ -50,10 +50,13 @@ An optional page in the app (`#/jam`, "Air Jam" in the navigation): air guitar w
 
 - **Two guitars.** An acoustic and an electric, each a 3D model built in code with three.js (no model files),
   each with its own sound. The choice is remembered.
-- **Chord hand.** The guitar's neck is split into five zones (Em, G, C, D, Am). The zone your palm is over sets
-  the chord, and dots on the frets show how that chord is really fingered.
-- **Strum hand.** Any fast stroke down or up over the body plays a six-string strum, one per stroke; the
-  guitar follows the hand's height and its strings light up and shake. Faster strokes are louder and brighter, and the strings are staggered
+- **You hold it.** With the camera on, the guitar sits in your hands: the body at your strumming hand, the neck
+  pointing at your other hand, sized from the size of your hands. Move or tilt and it comes with you. With the
+  camera off it rests in the middle of the page.
+- **Chord hand.** The neck is split into five zones (Em, G, C, D, Am). Slide your hand along the neck; the zone
+  your palm is over sets the chord, and dots on the frets show how that chord is really fingered.
+- **Strum hand.** Any fast stroke across the strings plays a six-string strum, one per stroke; the strings
+  light up and shake. The guitar ignores the strokes themselves, so strumming does not shake it. Faster strokes are louder and brighter, and the strings are staggered
   slightly, low-to-high on a downstroke and high-to-low on an upstroke.
 - **Mute.** Squeezing the chord hand into a tight fist stops the strings; strumming with it closed gives a muted
   "chk". A hand loosely curled round an imaginary neck does not mute.
@@ -165,12 +168,16 @@ Air Jam checks (headless Chrome):
   picture, slow drift ignored, a hand that drops out mid-stroke, tight fist mutes but a loose grip does not,
   one hand only, left-handed mode.
 - Speed: the tracker is timed on its first frames and switches between graphics card and processor to
-  whichever is faster on the machine; the tracking rate is shown in the corner of the picture.
+  whichever is faster on the machine, and re-checks if tracking later drops to half its best rate. The page
+  redraws once per camera frame instead of at the screen's refresh rate, uses fewer pixels while the camera
+  is on, lowers the guitar's resolution if tracking stays slow, and removes finished notes from the audio
+  graph. A 70 to 90 second soak run showed steady frame times and memory.
 - The real tracker, fed test clips of hands through a fake camera: model loads, skeleton lines up with the
   mirrored picture, chord follows the still hand, strums follow the moving hand, camera released on Stop.
 - Camera blocked, no camera, and tracker download failure each show their message and leave the fallback working.
 - No network requests besides the tracker's own files.
-- Both 3D guitars rendered and inspected; chord zones measured on the neck match what the hand logic uses;
+- Both 3D guitars rendered and inspected; the guitar follows scripted and real tracked hands (body at the
+  strum hand, neck through the chord hand); chord zones along the neck match what the hand logic uses;
   full-window mode on desktop and phone sizes (video cropped to fill, skeleton still lined up, page restored
   on Stop and Esc); the flat fallback when three.js is unavailable.
 - Not covered by automation: a real person in front of a real webcam (lighting, speed, how the fist reads).
