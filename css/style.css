@@ -863,6 +863,7 @@ svg { display: block; }
 .jam { display: grid; gap: 14px; }
 .jam__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; }
 .jam__head p { margin-top: 4px; }
+.jam__head > div { flex: 1 1 300px; min-width: 0; }
 .jam__stage {
   position: relative; overflow: hidden; margin: 0 auto;
   width: min(100%, calc(68vh * var(--ar, 1.7778))); aspect-ratio: var(--ar, 1.7778);   /* --ar is set to the camera's shape */
@@ -911,6 +912,10 @@ svg { display: block; }
 .jam__how h3 { font-family: var(--font-display); font-weight: 400; font-size: 1rem; }
 .jam__how ol { margin: 0; padding-left: 1.3em; display: grid; gap: 8px; color: var(--ice); }
 .jam__how b { color: #fff; }
+
+/* While the camera runs, frosted glass would be re-blurred on every video frame: use plain panels instead */
+.jam-live .panel, .jam-live .now, .jam-live .bar, .jam-live .player { -webkit-backdrop-filter: none; backdrop-filter: none; }
+.jam-live .panel, .jam-live .now { background: linear-gradient(160deg, #2B2A5C, #1A1842 45%, #173A52); }
 
 /* Way in from Home */
 .jamcard {

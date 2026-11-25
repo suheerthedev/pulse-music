@@ -44,11 +44,13 @@
     mounted: false, root: null, video: null, canvas: null, g: null,
     chord: 0, muted: false, padMute: false, dist: false, lefty: false,
     camera: 'off',            // off | starting | loading | on | error
-    error: '', stream: null, landmarker: null, raf: 0, lastVideoTime: -1, stamp: 0,
+    error: '', aspect: 1.33, stream: null, landmarker: null, raf: 0, lastVideoTime: -1, stamp: 0,
     hands: { fret: null, strum: null },       // smoothed landmark sets
     seenAt: 0, lowLight: false, lightAt: 0,
     strumY: null, strumT: 0, strumV: 0, lastStrumAt: 0, lastDir: -1,
     fistFrames: 0, openFrames: 0, lone: null, wantChord: -1,
+    stroke: { dir: 0, travel: 0, fired: false }, lineY: STRUM.y,
+    ms: 0, fps: 0, lastDetectAt: 0, delegate: '', bench: null,
     strings: [0, 1, 2, 3, 4, 5].map(function () { return { amp: 0, t0: 0 }; }),
     particles: [], strums: 0, last: null, status: ''
   };
@@ -131,6 +133,7 @@
       ch.frets.forEach(function (f, s) { if (f >= 0 && !A.bufs[TUNING[s] + f]) A.bufs[TUNING[s] + f] = pluckBuffer(TUNING[s] + f); });
     });
     applyTone();
+    if (ctx.state !== 'running' && ctx.resume) ctx.resume();
     return true;
   }
 
@@ -187,18 +190,26 @@
     [0, 5, 9, 13, 17].forEach(function (i) { x += h[i].x; y += h[i].y; });
     return { x: x / 5, y: y / 5 };
   };
+  /* Only a tight fist counts. A hand loosely curled round an imaginary guitar neck must keep ringing,
+     so every fingertip has to be pulled right back to the palm. Distances are measured in palm lengths. */
   function isFist(h) {
-    const w = h[0], d = function (p) { return Math.hypot((p.x - w.x) * 1.6, p.y - w.y); };  // 1.6 ~ frame aspect
-    let curled = 0;
-    [[8, 6], [12, 10], [16, 14], [20, 18]].forEach(function (f) { if (d(h[f[0]]) < d(h[f[1]]) * 1.05) curled++; });
-    return curled >= 3;
+    const w = h[0], d = function (p) { return Math.hypot((p.x - w.x) * S.aspect, p.y - w.y); };
+    const size = d(h[9]) || 1e-6;
+    let tight = 0;
+    [8, 12, 16, 20].forEach(function (tip) { if (d(h[tip]) / size < 1.12) tight++; });
+    return tight === 4;
   }
+  const centre = function (h) {                   // all 21 points: fingers move more than the palm on a wrist flick
+    let x = 0, y = 0;
+    h.forEach(function (p) { x += p.x; y += p.y; });
+    return { x: x / h.length, y: y / h.length };
+  };
   /* Smoothing: follow fast moves closely, average out jitter when the hand is nearly still */
   function smoothHand(prev, cur) {
     if (!prev) return cur.map(function (p) { return { x: p.x, y: p.y }; });
     return cur.map(function (p, i) {
       const q = prev[i], speed = Math.hypot(p.x - q.x, p.y - q.y);
-      const a = clamp(0.35 + speed * 14, 0.35, 0.92);
+      const a = clamp(0.5 + speed * 14, 0.5, 0.95);
       return { x: q.x + (p.x - q.x) * a, y: q.y + (p.y - q.y) * a };
     });
   }
@@ -238,56 +249,104 @@
       if (want !== cur && want === S.wantChord) setChord(want);
       S.wantChord = want;
       if (isFist(S.hands.fret)) { S.fistFrames++; S.openFrames = 0; } else { S.openFrames++; S.fistFrames = 0; }
-      if (!S.muted && S.fistFrames >= 3) { S.muted = true; damp(); syncPads(); }
-      else if (S.muted && S.openFrames >= 3) { S.muted = false; syncPads(); }
+      if (!S.muted && S.fistFrames >= 5) { S.muted = true; damp(); syncPads(); }
+      else if (S.muted && S.openFrames >= 2) { S.muted = false; syncPads(); }
     } else if (S.muted) {
       S.muted = false; syncPads();
     }
 
-    // Strum hand: a fast pass across the strum line, in either direction
+    // Strum hand: any fast stroke down or up plays, wherever the hand is. One strum per stroke.
+    // The drawn strings follow the hand, so the stroke always passes across them.
     if (S.hands.strum) {
-      const p = palm(S.hands.strum);
-      if (S.strumY !== null && now > S.strumT) {
-        const dt = now - S.strumT, v = (p.y - S.strumY) / dt;          // frame heights per second
+      const p = centre(S.hands.strum);
+      if (S.strumY !== null && now > S.strumT && now - S.strumT < 0.4) {
+        const dy = p.y - S.strumY, v = dy / (now - S.strumT);             // frame heights per second
         S.strumV = S.strumV * 0.4 + v * 0.6;
-        const crossedDown = S.strumY < STRUM.y && p.y >= STRUM.y, crossedUp = S.strumY > STRUM.y && p.y <= STRUM.y;
-        if ((crossedDown || crossedUp) && Math.abs(S.strumV) > 0.55 && now - S.lastStrumAt > 0.11) {
-          S.lastStrumAt = now;
-          strum(crossedDown ? 1 : -1, (Math.abs(S.strumV) - 0.45) / 2.6, { x: clamp(p.x, STRUM.x0, STRUM.x1), y: STRUM.y });
+        const dir = v > 0.25 ? 1 : v < -0.25 ? -1 : 0, k = S.stroke;
+        if (!dir) { k.dir = 0; k.travel = 0; k.fired = false; }
+        else if (dir !== k.dir) { k.dir = dir; k.travel = Math.abs(dy); k.fired = false; }
+        else k.travel += Math.abs(dy);
+        const speed = Math.max(Math.abs(S.strumV), Math.abs(v) * 0.8);
+        if (dir && !k.fired && k.travel >= 0.05 && speed > 0.6 && now - S.lastStrumAt > 0.09) {
+          k.fired = true; S.lastStrumAt = now;
+          strum(dir, (speed - 0.5) / 2.4, { x: clamp(palm(S.hands.strum).x, STRUM.x0, STRUM.x1), y: p.y });
         }
+        S.lineY += (clamp(p.y, 0.2, 0.8) - S.lineY) * Math.min(1, (now - S.strumT) / 1.2);   // strings drift to where the hand plays
       }
       S.strumY = p.y; S.strumT = now;
-    } else {
-      S.strumY = null; S.strumV = 0;
+    } else if (S.strumY !== null && now - S.strumT > 0.4) {
+      // Fast hands blur and drop out for a frame or two: only forget the stroke after a real pause
+      S.strumY = null; S.strumV = 0; S.stroke.dir = 0; S.stroke.travel = 0; S.stroke.fired = false;
     }
   }
 
   /* =====================================================================
      Camera + tracker
      ===================================================================== */
+  const T = { vision: null, files: null, model: null, spare: null };
+  async function makeTracker(delegate) {
+    return T.vision.HandLandmarker.createFromOptions(T.files, {
+      baseOptions: { modelAssetBuffer: new Uint8Array(T.model), delegate: delegate },
+      runningMode: 'VIDEO', numHands: 2,
+      minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5
+    });
+  }
   async function loadTracker() {
     if (S.landmarker) return;
-    const vision = await import(CFG.lib);
-    const files = await vision.FilesetResolver.forVisionTasks(CFG.wasm);
-    let lastErr = null;
-    for (const model of CFG.models) {
-      for (const delegate of CFG.delegates) {
-        try {
-          S.landmarker = await vision.HandLandmarker.createFromOptions(files, {
-            baseOptions: { modelAssetPath: model, delegate: delegate },
-            runningMode: 'VIDEO', numHands: 2,
-            minHandDetectionConfidence: 0.5, minHandPresenceConfidence: 0.5, minTrackingConfidence: 0.5
-          });
-          return;
-        } catch (e) { lastErr = e; }
+    if (!T.vision) T.vision = await import(CFG.lib);
+    if (!T.files) T.files = await T.vision.FilesetResolver.forVisionTasks(CFG.wasm);
+    if (!T.model) {
+      for (const url of CFG.models) {
+        try { const r = await fetch(url); if (r.ok) { T.model = await r.arrayBuffer(); break; } } catch (e) { /* try the next address */ }
       }
+      if (!T.model) throw new Error('model download failed');
     }
-    throw lastErr || new Error('tracker failed to load');
+    let lastErr = null;
+    for (const delegate of CFG.delegates) {
+      try {
+        S.landmarker = await makeTracker(delegate);
+        S.delegate = delegate;
+        S.bench = { n: 0, sum: 0, tried: [delegate], first: null, busy: false };
+        return;
+      } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('tracker failed to start');
+  }
+  /* Graphics-card tracking is usually fastest, but on some machines it is far slower than the processor.
+     Time the first frames; if they are slow, try the other one and keep whichever wins. */
+  function benchmark(ms) {
+    const b = S.bench;
+    if (!b || b.busy || b.done) return;
+    if (++b.n <= 3) return;                                   // let it warm up
+    b.sum += ms;
+    if (b.n < 15) return;
+    const avg = b.sum / (b.n - 3);
+    if (!b.first) {
+      const other = CFG.delegates.filter(function (d) { return b.tried.indexOf(d) < 0; })[0];
+      if (avg < 45 || !other) { b.done = true; return; }
+      b.busy = true;
+      makeTracker(other).then(function (lm) {
+        if (!S.landmarker || S.camera !== 'on') { lm.close(); b.done = true; return; }
+        b.first = { lm: S.landmarker, delegate: S.delegate, avg: avg };
+        S.landmarker = lm; S.delegate = other; b.tried.push(other);
+        b.n = 0; b.sum = 0; b.busy = false;
+      }).catch(function () { b.done = true; b.busy = false; });
+    } else {
+      if (avg > b.first.avg) {                                // the first one was faster after all
+        const slow = S.landmarker;
+        S.landmarker = b.first.lm; S.delegate = b.first.delegate;
+        try { slow.close(); } catch (e) { /* ignore */ }
+      } else {
+        try { b.first.lm.close(); } catch (e) { /* ignore */ }
+      }
+      b.first = null; b.done = true;
+    }
   }
 
   async function startCamera() {
     if (S.camera === 'starting' || S.camera === 'loading' || S.camera === 'on') return;
     audioInit();                                   // we are inside a click, so audio is allowed from here on
+    strum(1, 0.45, null);                          // sound check: you should hear one strum as the camera starts
     S.error = '';
     setCamera('starting');
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -296,7 +355,7 @@
         : 'This browser cannot open a camera. You can still play with the buttons and keys below.');
     }
     try {
-      S.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 960 }, height: { ideal: 540 } }, audio: false });
+      S.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } }, audio: false });
     } catch (e) {
       const n = e && e.name;
       return fail(n === 'NotAllowedError' || n === 'SecurityError'
@@ -310,7 +369,10 @@
     if (!S.mounted) return stopCamera();
     S.video.srcObject = S.stream;
     try { await S.video.play(); } catch (e) { /* autoplay quirks: the loop below still reads frames once playing */ }
-    if (S.video.videoWidth) $('#jamStage').style.setProperty('--ar', (S.video.videoWidth / S.video.videoHeight).toFixed(4));   // match the camera's shape
+    if (S.video.videoWidth) {
+      S.aspect = S.video.videoWidth / S.video.videoHeight;
+      $('#jamStage').style.setProperty('--ar', S.aspect.toFixed(4));   // match the camera's shape
+    }
     setCamera('loading');
     try { await loadTracker(); }
     catch (e) {
@@ -319,6 +381,7 @@
     }
     if (!S.mounted || !S.stream) return stopCamera();
     S.seenAt = performance.now() / 1000;
+    document.body.classList.add('jam-live');
     setCamera('on');
     size();
     kick();
@@ -328,7 +391,8 @@
     if (S.stream) S.stream.getTracks().forEach(function (t) { t.stop(); });
     S.stream = null;
     if (S.video) S.video.srcObject = null;
-    S.hands.fret = S.hands.strum = null; S.strumY = null; S.muted = false; S.lowLight = false;
+    S.hands.fret = S.hands.strum = null; S.strumY = null; S.muted = false; S.lowLight = false; S.fps = 0; S.lineY = STRUM.y;
+    document.body.classList.remove('jam-live');
     if (S.camera !== 'error') setCamera('off');
   }
   function fail(msg) { S.error = msg; setCamera('error'); }
@@ -354,7 +418,7 @@
      ===================================================================== */
   function size() {
     if (!S.canvas) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2), r = S.canvas.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5), r = S.canvas.getBoundingClientRect();
     if (!r.width) return;
     S.canvas.width = Math.round(r.width * dpr); S.canvas.height = Math.round(r.height * dpr);
   }
@@ -362,7 +426,7 @@
 
   function burst(at, vel) {
     if (reduceMotion.matches) return;
-    const p = at || { x: (STRUM.x0 + STRUM.x1) / 2, y: STRUM.y };
+    const p = at || { x: (STRUM.x0 + STRUM.x1) / 2, y: S.lineY };
     const n = Math.round(10 + vel * 22);
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2, sp = (0.1 + Math.random() * 0.5) * (0.5 + vel);
@@ -377,6 +441,10 @@
     g.clearRect(0, 0, W, H);
     const u = Math.max(1, W / 900);
     let busy = false;
+    const label = function (text, x, y) {         // text with a dark outline: readable over video, much cheaper than a shadow
+      g.lineJoin = 'round'; g.lineWidth = 3 * u; g.strokeStyle = 'rgba(5, 4, 15, .85)';
+      g.strokeText(text, x, y); g.fillText(text, x, y);
+    };
 
     // Chord zones
     const zw = (ZONE.x1 - ZONE.x0) / CHORDS.length;
@@ -391,11 +459,9 @@
       g.strokeRect(x + 2 * u, H * 0.06, w - 4 * u, H * 0.88);
       g.fillStyle = on ? '#FFFFFF' : 'rgba(241, 246, 252, .9)';
       g.font = (on ? 34 : 24) * u + 'px Michroma, "Arial Black", sans-serif';
-      g.shadowColor = '#05040F'; g.shadowBlur = 8 * u;
-      g.fillText(ch.name, x + w / 2, H * 0.9);
+      label(ch.name, x + w / 2, H * 0.9);
       g.font = 13 * u + 'px "Hanken Grotesk", sans-serif';
-      g.fillText('key ' + (i + 1), x + w / 2, H * 0.13);
-      g.shadowBlur = 0;
+      label('key ' + (i + 1), x + w / 2, H * 0.13);
     });
 
     // Strings and strum line
@@ -405,25 +471,26 @@
       const st = S.strings[k], age = nowSec - st.t0;
       const amp = age >= 0 ? st.amp * Math.exp(-age * 3.4) : 0;
       if (amp > 0.3) busy = true;
-      const y = STRUM.y * H + (k - 2.5) * gap;
-      g.strokeStyle = k % 2 ? '#2CE6D6' : '#FF3D9A';
-      g.shadowColor = g.strokeStyle; g.shadowBlur = (6 + amp) * u;
-      g.lineWidth = (2.2 - k * 0.2 + Math.min(3, amp * 0.12)) * u;
+      const y = S.lineY * H + (k - 2.5) * gap, color = k % 2 ? '#2CE6D6' : '#FF3D9A';
       g.beginPath();
       if (amp > 0.3 && !reduceMotion.matches) {
-        for (let x = sa; x <= sb + 1; x += 6 * u) {
+        for (let x = sa; x <= sb + 1; x += 8 * u) {
           const ph = (x - sa) / (sb - sa);
           const yy = y + Math.sin(Math.PI * ph) * Math.sin(age * (60 + k * 9)) * amp * u * 0.5;
           if (x === sa) g.moveTo(x, yy); else g.lineTo(x, yy);
         }
       } else { g.moveTo(sa, y); g.lineTo(sb, y); }
-      g.stroke();
+      g.strokeStyle = color;
+      g.globalAlpha = Math.min(0.5, 0.16 + amp * 0.03); g.lineWidth = (7 + Math.min(8, amp * 0.5)) * u; g.stroke();   // glow
+      g.globalAlpha = 1; g.lineWidth = (2.2 - k * 0.2 + Math.min(3, amp * 0.12)) * u; g.stroke();                    // string
     }
-    g.shadowBlur = 0;
     g.fillStyle = 'rgba(241, 246, 252, .95)'; g.font = 13 * u + 'px Michroma, sans-serif';
-    g.shadowColor = '#05040F'; g.shadowBlur = 8 * u;
-    g.fillText(S.muted || S.padMute ? 'MUTED' : 'STRUM', (sa + sb) / 2, STRUM.y * H - 4.2 * gap);
-    g.shadowBlur = 0;
+    label(S.muted || S.padMute ? 'Muted' : 'Strum hand', (sa + sb) / 2, S.lineY * H - 4.2 * gap);
+    if (S.camera === 'on' && S.fps) {
+      g.font = 12 * u + 'px "Hanken Grotesk", sans-serif'; g.textAlign = 'right';
+      label('tracking ' + Math.round(S.fps) + ' fps', W - 10 * u, 20 * u);
+      g.textAlign = 'center';
+    }
 
     // Particles
     if (S.particles.length) {
@@ -468,8 +535,14 @@
         S.lastVideoTime = S.video.currentTime;
         let res = null;
         S.stamp = Math.max(S.stamp + 1, performance.now());           // the tracker needs strictly increasing times
+        const t0 = performance.now();
         try { res = S.landmarker.detectForVideo(S.video, S.stamp); } catch (e) { res = null; }
-        processHands(res && res.landmarks ? res.landmarks : [], now);
+        const t1 = performance.now();
+        S.ms = S.ms ? S.ms * 0.9 + (t1 - t0) * 0.1 : t1 - t0;
+        if (S.lastDetectAt) { const f = 1000 / Math.max(1, t1 - S.lastDetectAt); S.fps = S.fps ? S.fps * 0.9 + f * 0.1 : f; }
+        S.lastDetectAt = t1;
+        benchmark(t1 - t0);
+        processHands(res && res.landmarks ? res.landmarks : [], t1 / 1000);
         checkLight(now);
       }
       updateStatus(now);
@@ -487,7 +560,7 @@
   function html() {
     return '<section class="jam" id="jam">' +
       '<header class="jam__head"><div><h2 id="viewTitle">Air Jam</h2>' +
-      '<p class="muted">Air guitar with your webcam. One hand picks the chord, the other strums.</p></div>' +
+      '<p class="muted">Left side: hold a hand in a column to pick the chord. Right side: flick your other hand down or up, fast, to strum.</p></div>' +
       '<button type="button" class="bubble bubble--pink" id="jamStart">Start camera</button></header>' +
       '<div class="jam__stage" id="jamStage"><video id="jamVideo" playsinline muted aria-hidden="true"></video>' +
       '<canvas id="jamCanvas" aria-hidden="true"></canvas>' +
@@ -507,8 +580,8 @@
       '</div>' +
       '<section class="about jam__how"><h3>How it works</h3><ol>' +
         '<li><b>Chord hand.</b> Hold one hand up on the chord side of the picture. The column your palm is in sets the chord: ' + CHORDS.map(function (c) { return c.name; }).join(', ') + '.</li>' +
-        '<li><b>Strum hand.</b> Sweep your other hand quickly down or up across the glowing strings. A faster sweep is louder and brighter; down and up strums play the strings in opposite order.</li>' +
-        '<li><b>Mute.</b> Close your chord hand into a fist to stop the strings. Strumming while it is closed gives a muted “chk”.</li>' +
+        '<li><b>Strum hand.</b> On the other side of the picture, flick your other hand quickly down or up, like hitting strings. Any fast stroke plays, wherever your hand is; slow moves are ignored. A faster stroke is louder and brighter.</li>' +
+        '<li><b>Mute.</b> Squeeze your chord hand into a tight fist to stop the strings. Strumming while it is closed gives a muted “chk”.</li>' +
         '<li><b>Sound.</b> Each string is a Karplus-Strong model: a burst of noise looping through a short delay, synthesized live. Distortion adds a soft-clipping stage and a speaker-style filter.</li>' +
         '<li><b>Privacy.</b> Hand tracking is MediaPipe Hand Landmarker running in your browser. Video stays on your device: nothing is recorded, stored or uploaded.</li>' +
         '<li><b>No camera?</b> The chord buttons, the Strum button, keys 1 to 5, Space and M do everything the camera does.</li>' +
@@ -531,7 +604,7 @@
     setStatus(mode === 'starting' ? 'Asking for the camera…'
       : mode === 'loading' ? 'Loading the hand tracker (a few seconds the first time)…'
       : mode === 'error' ? S.error
-      : mode === 'on' ? 'Camera on. Show your hands.'
+      : mode === 'on' ? 'Camera on. Hold both hands up so the camera can see them.'
       : 'Chord ' + CHORDS[S.chord].name + '. Press Space or Strum to play.');
     kick();
   }
@@ -539,11 +612,11 @@
     const lost = now - S.seenAt > 0.7, both = S.hands.fret && S.hands.strum;
     setStatus(lost && S.lowLight ? 'It is too dark to see your hands. Turn on a light or face a window.'
       : lost ? 'No hands in view. Hold them up, about an arm’s length from the camera.'
-      : S.muted ? 'Muted: open your chord hand to let the strings ring.'
+      : S.muted ? 'Muted, because your chord hand is a fist. Open it to let the strings ring.'
       : !both && S.hands.fret ? 'Chord ' + CHORDS[S.chord].name + '. Bring in your other hand to strum.'
       : !both ? 'Strumming ' + CHORDS[S.chord].name + '. Bring in your other hand to change chords.'
       : S.lowLight ? 'Chord ' + CHORDS[S.chord].name + '. The picture is dark, so tracking may be jumpy.'
-      : 'Chord ' + CHORDS[S.chord].name + '. Sweep across the strings to strum.');
+      : 'Chord ' + CHORDS[S.chord].name + '. Flick your strum hand down or up to play.');
   }
 
   function syncPads() {
@@ -632,9 +705,10 @@
     html: html, mount: mount, unmount: unmount, handleKey: handleKey,
     // Test hooks: feed synthetic hand landmarks and read the state back
     _feed: function (hands, now) { processHands(hands, now); kick(); },
-    _state: function () { return { chord: CHORDS[S.chord].name, muted: S.muted, padMute: S.padMute, dist: S.dist, lefty: S.lefty, strums: S.strums, last: S.last, camera: S.camera, status: S.status, notes: Object.keys(A.bufs).length, ctx: A.ctx ? A.ctx.state : 'none' }; },
+    _state: function () { return { chord: CHORDS[S.chord].name, muted: S.muted, padMute: S.padMute, dist: S.dist, lefty: S.lefty, delegate: S.delegate, ms: Math.round(S.ms), fps: Math.round(S.fps), strums: S.strums, last: S.last, camera: S.camera, status: S.status, notes: Object.keys(A.bufs).length, ctx: A.ctx ? A.ctx.state : 'none' }; },
     _audio: function () { return A; },
     _particles: function () { return S.particles.length; },
+    _bench: function () { return S.bench; },
     _hands: function () { return { fret: S.hands.fret ? palm(S.hands.fret) : null, strum: S.hands.strum ? palm(S.hands.strum) : null, v: S.strumV }; }
   };
 })();

@@ -49,9 +49,11 @@ seek and volume control real sound. The 3D aisle is CSS transforms only: no WebG
 An optional page in the app (`#/jam`, "Air Jam" in the navigation): air guitar with your webcam.
 
 - **Chord hand.** The picture is split into five columns (Em, G, C, D, Am). The column your palm is in sets the chord.
-- **Strum hand.** A fast sweep down or up across the strum line plays a six-string strum. Faster sweeps are
-  louder and brighter, and the strings are staggered slightly, low-to-high on a downstroke and high-to-low on an upstroke.
-- **Mute.** Closing the chord hand into a fist stops the strings; strumming with it closed gives a muted "chk".
+- **Strum hand.** Any fast stroke down or up on the other side of the picture plays a six-string strum, one per
+  stroke; the drawn strings follow the hand. Faster strokes are louder and brighter, and the strings are staggered
+  slightly, low-to-high on a downstroke and high-to-low on an upstroke.
+- **Mute.** Squeezing the chord hand into a tight fist stops the strings; strumming with it closed gives a muted
+  "chk". A hand loosely curled round an imaginary neck does not mute.
 - **Sound.** Each string is a Karplus-Strong plucked-string model, synthesized in the browser, with a clean
   and a distortion setting.
 - **No camera needed.** Chord buttons, a Strum button, keys `1` to `5`, `Space` (strum) and `M` (mute) do
@@ -153,8 +155,11 @@ Air Jam checks (headless Chrome):
 - Buttons and keys: chords, strum, mute, clean/distortion, left-handed; Space strums on this page only and
   goes back to play/pause elsewhere.
 - Sound: all 15 string notes are in tune to within 0.1 cent; output level checked for clean and distortion.
-- Gesture logic with scripted hand positions: five chord columns, fast down and up sweeps, slow drift ignored,
-  fist mute and release, one hand only, left-handed mode.
+- Gesture logic with scripted hand positions: five chord columns, fast down and up strokes anywhere in the
+  picture, slow drift ignored, a hand that drops out mid-stroke, tight fist mutes but a loose grip does not,
+  one hand only, left-handed mode.
+- Speed: the tracker is timed on its first frames and switches between graphics card and processor to
+  whichever is faster on the machine; the tracking rate is shown in the corner of the picture.
 - The real tracker, fed test clips of hands through a fake camera: model loads, skeleton lines up with the
   mirrored picture, chord follows the still hand, strums follow the moving hand, camera released on Stop.
 - Camera blocked, no camera, and tracker download failure each show their message and leave the fallback working.
@@ -163,6 +168,9 @@ Air Jam checks (headless Chrome):
 
 Changes made along the way:
 
+- Air Jam first needed the strum hand to cross a fixed line and muted on any curled hand. On a real webcam
+  that was hard to hit and a natural guitar grip muted everything, so strums now fire on any fast stroke and
+  only a tight fist mutes. Canvas shadows and frosted panels were dropped while the camera runs, for speed.
 - The first version had a disc-player hero on a light page. It was rebuilt as the vinyl loading screen,
   the 3D record library and a dark app shell.
 - Scroll snapping was first done with CSS and trapped mouse-wheel users between stops in testing; it was
