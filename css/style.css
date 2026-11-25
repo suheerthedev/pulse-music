@@ -534,7 +534,8 @@ svg { display: block; }
   box-shadow: inset 0 2px 6px rgba(0, 0, 0, .5);
 }
 .search input::placeholder { color: var(--chrome); opacity: 1; }
-.tabs { grid-column: 1 / -1; display: flex; gap: 8px; }
+.tabs { grid-column: 1 / -1; display: flex; gap: 8px; min-width: 0; }
+@media (max-width: 359px) { .tabs { gap: 5px; } .tabs a { padding-inline: 11px; font-size: .875rem; } }
 .tabs a, .chip {
   display: inline-flex; align-items: center; gap: 8px;
   min-height: 40px; padding: 0 16px; border-radius: 999px;
@@ -855,6 +856,81 @@ svg { display: block; }
 .queue__t { display: block; font-size: .9375rem; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .queue__a { display: block; font-size: .8125rem; color: var(--chrome); }
 .queue button > span:last-child { min-width: 0; }
+
+/* =====================================================================
+   AIR JAM
+   ===================================================================== */
+.jam { display: grid; gap: 14px; }
+.jam__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; }
+.jam__head p { margin-top: 4px; }
+.jam__stage {
+  position: relative; overflow: hidden; margin: 0 auto;
+  width: min(100%, calc(68vh * var(--ar, 1.7778))); aspect-ratio: var(--ar, 1.7778);   /* --ar is set to the camera's shape */
+  border-radius: 22px; border: 1px solid rgba(255, 255, 255, .4);
+  background:
+    radial-gradient(60% 60% at 80% 20%, rgba(255, 61, 154, .3), transparent 70%),
+    radial-gradient(60% 60% at 10% 90%, rgba(44, 230, 214, .22), transparent 70%),
+    #0C0B24;
+  box-shadow: inset 0 0 0 4px rgba(255, 255, 255, .06), 0 20px 34px -22px #000;
+}
+.jam__stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); opacity: 0; transition: opacity .3s; }
+.jam__stage[data-camera="on"] video { opacity: .82; }
+.jam__stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.jam__idle {
+  position: absolute; left: 50%; top: 14px; transform: translateX(-50%); width: max-content; max-width: calc(100% - 28px);
+  padding: 8px 16px; border-radius: 14px; text-align: center; font-size: .9375rem; font-weight: 600;
+  background: rgba(12, 11, 36, .88); border: 1px solid rgba(221, 232, 245, .35); color: var(--ice-hi);
+}
+.jam__status {
+  min-height: 2.9em; padding: 10px 14px; border-radius: 14px; font-weight: 600;
+  background: linear-gradient(180deg, #211E55, var(--indigo)); border: 2px solid #05040F; color: var(--aqua);
+  box-shadow: inset 0 2px 10px rgba(0, 0, 0, .7);
+}
+.jam__controls { display: grid; gap: 12px; }
+.jam__group { display: flex; flex-wrap: wrap; gap: 8px; }
+.jam__pad {
+  flex: 1 1 56px; min-height: 64px; display: grid; place-items: center; align-content: center; gap: 2px; padding: 6px 4px;
+  border-radius: 16px; border: 1px solid rgba(255, 255, 255, .34); color: var(--ice-hi);
+  background: linear-gradient(180deg, rgba(221, 232, 245, .22), rgba(221, 232, 245, .07));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .4);
+  transition: transform .1s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.jam__pad:active { transform: scale(.95); }
+.jam__pad b { font-family: var(--font-display); font-weight: 400; font-size: 1.1rem; }
+.jam__pad[aria-pressed="true"] {
+  color: var(--indigo); border-color: #fff;
+  background: radial-gradient(120% 80% at 30% 8%, rgba(255, 255, 255, .85), rgba(255, 255, 255, 0) 55%), linear-gradient(180deg, #FF8CC4, var(--pink) 58%, #F0318C);
+  box-shadow: inset 0 -4px 8px rgba(120, 8, 64, .35), 0 8px 18px -6px rgba(255, 61, 154, .8);
+}
+.jam kbd {
+  display: inline-block; min-width: 1.6em; padding: 1px 6px; border-radius: 6px; text-align: center;
+  font: 700 .75rem var(--font-body); color: var(--indigo); background: var(--ice-hi); box-shadow: 0 2px 0 var(--chrome-dk);
+}
+.jam__strum { width: 100%; min-height: 64px; font-family: var(--font-display); font-weight: 400; font-size: 1.05rem; letter-spacing: .08em; }
+.jam__how h3 { font-family: var(--font-display); font-weight: 400; font-size: 1rem; }
+.jam__how ol { margin: 0; padding-left: 1.3em; display: grid; gap: 8px; color: var(--ice); }
+.jam__how b { color: #fff; }
+
+/* Way in from Home */
+.jamcard {
+  display: flex; align-items: center; gap: 16px; padding: 14px 16px; border-radius: 20px; text-decoration: none;
+  border: 1px solid rgba(255, 255, 255, .34);
+  background: linear-gradient(110deg, rgba(44, 230, 214, .26), rgba(124, 108, 240, .22) 55%, rgba(255, 61, 154, .26));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .3);
+}
+.jamcard:hover { filter: brightness(1.12); }
+.jamcard > span:nth-child(2) { flex: 1; min-width: 0; display: grid; gap: 2px; color: var(--ice); font-size: .9375rem; }
+.jamcard b { font-family: var(--font-display); font-weight: 400; font-size: 1.05rem; color: #fff; }
+.jamcard__art { flex: none; width: 58px; height: 58px; display: grid; align-content: center; gap: 5px; padding: 0 6px; border-radius: 14px; background: #0C0B24; border: 1px solid rgba(255, 255, 255, .3); }
+.jamcard__art i { height: 2px; border-radius: 2px; background: var(--pink); box-shadow: 0 0 6px var(--pink); }
+.jamcard__art i:nth-child(even) { background: var(--aqua); box-shadow: 0 0 6px var(--aqua); }
+.jamcard__go { flex: none; padding: 8px 16px; border-radius: 999px; font-weight: 700; color: var(--indigo); background: linear-gradient(180deg, #F6F9FD, var(--chrome)); }
+@media (min-width: 700px) {
+  .jam__controls { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); align-items: stretch; }
+  .jam__controls > .jam__group:last-child { grid-column: 1 / -1; }
+  .jam__strum { height: 100%; }
+}
 
 /* =====================================================================
    3. PLAYER BAR

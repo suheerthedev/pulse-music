@@ -287,6 +287,8 @@
         '<div class="feature__actions"><button type="button" class="bubble bubble--pink" data-action="play-list" data-ctx="album:' + pick.id + '">' + ICON.play + '<span>Play album</span></button>' +
         '<a class="ghost" href="#/album/' + pick.id + '">Open album</a></div></div></section>' +
 
+      '<a class="jamcard" href="#/jam"><span class="jamcard__art" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></span>' +
+        '<span><b>Air Jam</b><span>Play air guitar with your webcam, or with keys 1 to 5 and Space.</span></span><span class="jamcard__go" aria-hidden="true">Play</span></a>' +
       section('Mixtapes for late nights', row(D.playlists.map(playlistCard)), ['#/library', 'Open the crate']) +
       section('Fresh off the press', row(D.albums.map(albumCard)), ['#/library', 'Open the crate']) +
       section('Browse by genre', genreTiles()) +
@@ -321,6 +323,10 @@
           D.playlists.map(playlistCard).join('') + '</div>') +
         section('Albums', '<div class="grid">' + D.albums.map(albumCard).join('') + '</div>') +
         section('Artists', '<div class="grid">' + D.artists.map(artistCard).join('') + '</div>');
+    },
+
+    jam: function () {
+      return window.PulseJam ? window.PulseJam.html() : '<section><h2 id="viewTitle">Air Jam</h2><p class="muted">Air Jam could not load.</p></section>';
     },
 
     liked: function () {
@@ -376,15 +382,17 @@
     const parts = location.hash.replace(/^#\/?/, '').split('/'), name = parts[0], id = parts[1];
     if (name === 'genre' && GENRE[id]) { state.genre = id; state.likedOnly = false; return { name: 'search' }; }
     if ((name === 'playlist' && PLAYLIST[id]) || (name === 'album' && ALBUM[id]) || (name === 'artist' && ARTIST[id])) return { name: name, id: id };
-    if (name === 'search' || name === 'library' || name === 'liked') return { name: name };
+    if (name === 'search' || name === 'library' || name === 'liked' || name === 'jam') return { name: name };
     return { name: 'home' };
   }
-  const TITLES = { home: 'Home', search: 'Search', library: 'Your Crate', liked: 'Liked Songs' };
+  const TITLES = { home: 'Home', search: 'Search', library: 'Your Crate', liked: 'Liked Songs', jam: 'Air Jam' };
 
   function render() {
     const r = state.route, active = document.activeElement;
     const fkey = active && el.view.contains(active) ? active.getAttribute('data-fkey') : null;
+    if (window.PulseJam && r.name !== 'jam') window.PulseJam.unmount();   // leaving Air Jam releases the camera
     el.view.innerHTML = VIEWS[r.name](r.id);
+    if (window.PulseJam && r.name === 'jam') window.PulseJam.mount(el.view);
     if (fkey) { const again = $('[data-fkey="' + fkey + '"]', el.view) || $('[data-fkey="g-all"]', el.view); if (again) again.focus(); }
     const navKey = r.name === 'liked' || r.name === 'playlist' || r.name === 'album' || r.name === 'artist' ? 'library' : r.name;
     $$('[data-nav]').forEach(function (a) { if (a.dataset.nav === navKey) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
@@ -1085,6 +1093,7 @@
   document.addEventListener('keydown', function (e) {
     const tag = e.target && e.target.tagName;
     const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+    if (state.route.name === 'jam' && window.PulseJam && !inJourney() && window.PulseJam.handleKey(e)) return;   // 1-5, Space, M
     if (e.key === '/' && !typing && !e.ctrlKey && !e.metaKey) { e.preventDefault(); el.search.focus(); return; }
     if ((e.key === ' ' || e.code === 'Space') && (e.target === document.body || e.target === document.documentElement)) { e.preventDefault(); togglePlay(); return; }
     if (!typing && !e.altKey && !e.metaKey && inJourney()) {

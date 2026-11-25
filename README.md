@@ -44,6 +44,28 @@ seek and volume control real sound. The 3D aisle is CSS transforms only: no WebG
 | Like button with feedback | Heart fills and bursts, counters bump, a toast confirms, saved in `localStorage`, Liked Songs page |
 | Persistent player bar | Play/pause, next/previous, seek, volume and mute, docked on every page of the app |
 
+## Air Jam (added after the contest)
+
+An optional page in the app (`#/jam`, "Air Jam" in the navigation): air guitar with your webcam.
+
+- **Chord hand.** The picture is split into five columns (Em, G, C, D, Am). The column your palm is in sets the chord.
+- **Strum hand.** A fast sweep down or up across the strum line plays a six-string strum. Faster sweeps are
+  louder and brighter, and the strings are staggered slightly, low-to-high on a downstroke and high-to-low on an upstroke.
+- **Mute.** Closing the chord hand into a fist stops the strings; strumming with it closed gives a muted "chk".
+- **Sound.** Each string is a Karplus-Strong plucked-string model, synthesized in the browser, with a clean
+  and a distortion setting.
+- **No camera needed.** Chord buttons, a Strum button, keys `1` to `5`, `Space` (strum) and `M` (mute) do
+  everything the camera does. If the camera is blocked, missing, busy, or the tracker cannot load, the page says so
+  and the buttons and keys keep working.
+- **Left-handed** mode mirrors the layout.
+
+Privacy: hand tracking is [MediaPipe Hand Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker)
+(Tasks Vision), downloaded from a CDN when you press **Start camera** and run in the browser. Video is never
+recorded, stored or uploaded. The library is pinned to `@mediapipe/tasks-vision@0.10.35` on purpose: versions
+from 1.0.0 on also send anonymous usage statistics to a Google logging endpoint with no option to turn that off.
+
+Browsers only allow the camera on `https` or `localhost`, so use the deployed site or a local server (`npx serve .`) for the camera. The buttons and keys work anywhere.
+
 ## Run it
 
 No build step. Open `index.html` in a browser, or serve the folder:
@@ -70,6 +92,7 @@ css/style.css   all styles (mobile-first)
 js/data.js      fictional catalog: genres, artists, albums, tracks, playlists
 js/audio.js     Web Audio synth engine and song generator
 js/app.js       views and router, player, likes, scroll journey and 3D aisle
+js/airjam.js    Air Jam: hand tracking, gestures, Karplus-Strong guitar, fallback controls
 ```
 
 ## Design decisions
@@ -125,6 +148,19 @@ Automated checks run in headless Chrome during the build:
 - Output level of all 14 generated tracks measured in four sections each: no clipping (peaks below 0.9).
 - Reduced-motion mode.
 
+Air Jam checks (headless Chrome):
+
+- Buttons and keys: chords, strum, mute, clean/distortion, left-handed; Space strums on this page only and
+  goes back to play/pause elsewhere.
+- Sound: all 15 string notes are in tune to within 0.1 cent; output level checked for clean and distortion.
+- Gesture logic with scripted hand positions: five chord columns, fast down and up sweeps, slow drift ignored,
+  fist mute and release, one hand only, left-handed mode.
+- The real tracker, fed test clips of hands through a fake camera: model loads, skeleton lines up with the
+  mirrored picture, chord follows the still hand, strums follow the moving hand, camera released on Stop.
+- Camera blocked, no camera, and tracker download failure each show their message and leave the fallback working.
+- No network requests besides the tracker's own files.
+- Not covered by automation: a real person in front of a real webcam (lighting, speed, how the fist reads).
+
 Changes made along the way:
 
 - The first version had a disc-player hero on a light page. It was rebuilt as the vinyl loading screen,
@@ -149,7 +185,9 @@ Manual checks by the team (fill in before submitting):
   [Hanken Grotesk](https://fonts.google.com/specimen/Hanken+Grotesk), Google Fonts, SIL Open Font License.
 - Audio: Web Audio API, built into the browser. No samples or recordings.
 - Artwork: generated SVG and CSS. No external images.
-- Libraries: none.
+- Libraries: none for the site itself. Air Jam loads
+  [MediaPipe Tasks Vision](https://www.npmjs.com/package/@mediapipe/tasks-vision) 0.10.35 and Google's
+  hand landmarker model (Apache 2.0) from a CDN, only when the camera is started.
 - Interaction reference: the ring loader and "fly into an aisle" browsing were inspired by Luka Skhiladze's
   portfolio site. Nothing was copied; the vinyl, the record library, the code and the artwork are our own.
 - The groove zoom was inspired by the Mind of Akira site, and the side view of the collection by Jacob How's
