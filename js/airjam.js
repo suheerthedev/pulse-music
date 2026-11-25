@@ -561,7 +561,7 @@
     // How many canvas pixels to draw. Off camera: sharp (up to 1.5x). With the camera on: a fixed budget of at
     // most 1280 across (less if tracking is struggling), stretched over the window. A full-window canvas at a
     // high-density screen's own resolution is several times the work for no visible gain behind a webcam picture.
-    const r = S.canvas.getBoundingClientRect();
+    const r = $('#jamStage').getBoundingClientRect();
     if (!r.width || !r.height) return;
     const dpr = S.live ? Math.min(1, S.budget / r.width) : Math.min(window.devicePixelRatio || 1, 1.5);
     S.canvas.width = Math.round(r.width * dpr); S.canvas.height = Math.round(r.height * dpr);
@@ -572,7 +572,10 @@
       const k = Math.max(r.width / vw, r.height / vh), dw = vw * k / r.width, dh = vh * k / r.height;
       S.fit = { sx: dw, ox: (1 - dw) / 2, sy: dh, oy: (1 - dh) / 2 };
     } else S.fit = { sx: 1, ox: 0, sy: 1, oy: 0 };
-    if (S.view) { S.view.setRatio(S.ratio); S.view.resize(); }
+    if (S.view) {
+      S.view.setRatio(S.ratio); S.view.resize();
+      S.view.setOverlay(S.canvas);                   // the overlay canvas changed size: its texture has to be made afresh
+    }
   }
   const fx = function (x) { return S.lefty ? 1 - x : x; };   // layout x -> screen x
 
@@ -615,7 +618,6 @@
       const cs = Math.cos(P.ang);
       view.setPose({ x: fx(P.x), y: P.y, ux: S.lefty ? -cs : cs, uy: Math.sin(P.ang), L: P.L, lefty: S.lefty });
       view.update({ chord: S.chord, frets: CHORDS[S.chord].frets });
-      view.render(nowSec, amps, reduceMotion.matches);
       const L = view.labels();
       S.strumAt = { x: S.lefty ? 1 - L.strum.x : L.strum.x, y: L.strum.y };
       const zpx = ext().zw * P.L * H;                // names shrink with the neck when the guitar is small
@@ -704,6 +706,7 @@
       g.strokeStyle = pair[1]; g.lineWidth = 3 * u;
       g.beginPath(); g.arc(fx(c.x) * W, c.y * H, 16 * u, 0, 6.3); g.stroke();
     });
+    if (view) view.render(nowSec, amps, reduceMotion.matches);   // backdrop, guitar, then this overlay: all in the one canvas
     return busy;
   }
 
@@ -956,6 +959,8 @@
         try {
           S.view = window.PulseGuitar3D.create(S.gl);
           S.view.setType(S.guitar);
+          S.view.setOverlay(S.canvas);
+          S.root.classList.add('jam--3d');           // the 2D canvas is now drawn inside the 3D one, not shown itself
           if (S.live) { S.root.classList.add('jam--one'); S.view.setVideo(S.video); }
           size();
         } catch (e) { S.view = null; }

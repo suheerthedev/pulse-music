@@ -224,9 +224,12 @@
 
   /* ------------------------------------------------------------------ the view */
   function create(canvas) {
-    const renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+    // An opaque canvas: the browser can hand it straight to the screen. A see-through one has to be blended
+    // with everything under it over the whole window, which on integrated graphics at a high-density
+    // resolution cost more than the hand tracking itself (measured: 54 ms a look against 9).
+    const renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: false, antialias: true });
     renderer.autoClear = false;
-    renderer.setClearColor(0x000000, 0);
+    renderer.setClearColor(0x0C0B24, 1);
     renderer.toneMapping = THREE.NeutralToneMapping || THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.1;
 
@@ -262,10 +265,28 @@
     const root = new THREE.Group();
     scene.add(root);
 
-    /* The camera picture can be drawn into this same canvas, behind the guitar. One small canvas stretched
-       over the window is far less work for the graphics card than a full-size video with canvases on top. */
-    const bgScene = new THREE.Scene(), bgCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-    let bgTex = null, bgMesh = null, bgVideo = null;
+    /* Everything is drawn into this one canvas: a backdrop (the camera picture when it is on, a painted one
+       when it is off), the guitar, and on top the flat overlay (chord names, hand skeleton, sparks) that the
+       page draws on a hidden 2D canvas. */
+    const bgScene = new THREE.Scene(), ovScene = new THREE.Scene(), flatCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const flat = function (tex, see) {
+      tex.generateMipmaps = false; tex.minFilter = THREE.LinearFilter; tex.magFilter = THREE.LinearFilter;
+      return new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ map: tex, transparent: !!see, depthTest: false, depthWrite: false, toneMapped: false }));
+    };
+    const still = (function () {                                         // the page's own stage backdrop, painted once
+      const c = document.createElement('canvas'); c.width = 320; c.height = 180;
+      const x = c.getContext('2d');
+      x.fillStyle = '#0C0B24'; x.fillRect(0, 0, 320, 180);
+      [['rgba(255, 61, 154, .3)', 256, 36], ['rgba(44, 230, 214, .22)', 32, 162]].forEach(function (b) {
+        const g = x.createRadialGradient(b[1], b[2], 0, b[1], b[2], 190);
+        g.addColorStop(0, b[0]); g.addColorStop(0.7, 'rgba(12, 11, 36, 0)');
+        x.fillStyle = g; x.fillRect(0, 0, 320, 180);
+      });
+      const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+      return flat(t, false);
+    })();
+    bgScene.add(still);
+    let bgTex = null, bgMesh = null, bgVideo = null, ovTex = null, ovMesh = null;
     function fitVideo() {
       if (!bgTex || !bgVideo || !bgVideo.videoWidth) return;
       const va = bgVideo.videoWidth / bgVideo.videoHeight, rx = Math.min(1, st.aspect / va), ry = Math.min(1, va / st.aspect);
@@ -273,12 +294,21 @@
     }
     function setVideo(video) {
       if (bgMesh) { bgScene.remove(bgMesh); bgMesh.geometry.dispose(); bgMesh.material.dispose(); bgTex.dispose(); bgMesh = bgTex = bgVideo = null; }
+      still.visible = !video;
       if (!video) return;
       bgVideo = video;
       bgTex = new THREE.VideoTexture(video); bgTex.colorSpace = THREE.SRGBColorSpace;
-      bgMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ map: bgTex, color: 0xE2E2E2, depthTest: false, depthWrite: false, toneMapped: false }));
+      bgMesh = flat(bgTex, false);
+      bgMesh.material.color.set(0xE2E2E2);
       bgScene.add(bgMesh);
       fitVideo();
+    }
+    function setOverlay(canvas2d) {
+      if (ovMesh) { ovScene.remove(ovMesh); ovMesh.geometry.dispose(); ovMesh.material.dispose(); ovTex.dispose(); ovMesh = ovTex = null; }
+      if (!canvas2d) return;
+      ovTex = new THREE.CanvasTexture(canvas2d); ovTex.colorSpace = THREE.SRGBColorSpace;
+      ovMesh = flat(ovTex, true);
+      ovScene.add(ovMesh);
     }
     const st = { type: '', model: null, chord: -1, frets: null, aspect: 4 / 3, w: 0, h: 0, posed: false, ratio: 1,
       p: { x: 0.66, y: 0.52, ux: 1, uy: 0.12, L: 0.8, lefty: false } };
@@ -340,6 +370,7 @@
       renderer.setPixelRatio(1);
       renderer.setSize(Math.max(2, Math.round(r.width * st.ratio)), Math.max(2, Math.round(r.height * st.ratio)), false);
       camera.aspect = st.aspect; camera.updateProjectionMatrix();
+      camera.updateMatrixWorld(true);                 // labels are placed before the first render, so the camera must be ready now
       st.posed = false;
       fitVideo();
     }
@@ -356,8 +387,11 @@
         s.mesh.position.y = s.base.y + (calm ? 0 : Math.sin(now * (70 + i * 11)) * a * 0.0035);
       });
       renderer.clear();
-      if (bgMesh) { fitVideo(); renderer.render(bgScene, bgCam); renderer.clearDepth(); }
+      if (bgMesh) fitVideo();
+      renderer.render(bgScene, flatCam);
+      renderer.clearDepth();
       renderer.render(scene, camera);
+      if (ovMesh) { ovTex.needsUpdate = true; renderer.clearDepth(); renderer.render(ovScene, flatCam); }
     }
 
     function labels() {
@@ -371,14 +405,15 @@
     }
 
     return {
-      setType: setType, update: update, setPose: setPose, setVideo: setVideo, resize: resize, render: render, labels: labels,
+      setType: setType, update: update, setPose: setPose, setVideo: setVideo, setOverlay: setOverlay, resize: resize, render: render, labels: labels,
       type: function () { return st.type; },
       /* Sizes the hand logic needs, in scale lengths: where the guitar starts and ends, and the chord zones on the neck */
       extents: function () { const m = st.model; return { xMin: m.xMin, xMax: m.xMax, bodyHalf: m.spec.bodyHalf, pick: PICK, z0: m.z0, zw: m.zw }; },
       /* How many canvas pixels per page pixel: fewer = less work for the graphics card */
       setRatio: function (r) { if (r !== st.ratio) { st.ratio = r; resize(); } },
       dispose: function () {
-        setVideo(null);
+        setVideo(null); setOverlay(null);
+        still.geometry.dispose(); still.material.map.dispose(); still.material.dispose();
         if (st.model) dispose(st.model.group);
         if (scene.environment) scene.environment.dispose();
         renderer.dispose();

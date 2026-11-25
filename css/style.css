@@ -923,6 +923,7 @@ html.jam-lock { overflow: hidden; }
 .jam-live .journey__pin > *, .jam-live .side, .jam-live .bar, .jam-live .now, .jam-live .player, .jam-live .foot, .jam-live .skip, .jam-live .toast,
 .jam-live .jam__head > div, .jam-live .jam__pads, .jam-live .jam__strum, .jam-live .jam__how { display: none !important; }
 .jam-live .app { background: #0C0B24; }
+.jam--3d #jamCanvas { display: none; }   /* its drawing is shown through the 3D canvas */
 .jam--one .jam__stage video { opacity: 0 !important; width: 2px; height: 2px; }   /* still playing, drawn inside the canvas instead */
 .jam-live .view { container-type: normal; }       /* so the stage can be fixed to the window, not to this column */
 .jam-live .jam__stage {

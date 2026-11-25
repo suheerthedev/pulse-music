@@ -170,8 +170,9 @@ Air Jam checks (headless Chrome):
 - Speed, and staying fast. Measured on a laptop with integrated graphics and a high-density screen, where the
   first versions fell to 2 frames a second after about half a minute: the hand tracker and the page share the
   graphics card, and driven flat out it falls further and further behind. What fixed it there: while the camera
-  is on, the camera picture and the guitar are drawn into one canvas of at most 1280 pixels across, stretched
-  over the window, and nothing else on the page is drawn at all; the tracker looks at most 20 times a second,
+  is on, the camera picture, the guitar and the overlay are all drawn into one opaque canvas of at most 1280
+  pixels across, stretched over the window, and nothing else on the page is drawn at all (a see-through canvas
+  blended over the page cost more than the tracking itself); the tracker looks at most 20 times a second,
   less often when a look takes long, and 10 times a second while no hands are in view. Tracking stays on the
   main thread on the graphics card (15 to 20 ms a look on that laptop, against about 50 ms on the processor and
   50 to 150 ms from a worker thread). Finished notes are removed from the audio graph. A **Speed report** button
