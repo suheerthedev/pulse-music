@@ -191,6 +191,11 @@ Air Jam checks (headless Chrome):
 
 Changes made along the way:
 
+- On a real webcam the tracker sometimes let go of a hand that was plainly in view (a strumming hand is blurred
+  and often edge-on). Its confidence bars are now lower than the library's defaults; a hand missed for a look
+  or two stays where it was on screen and in the status line; the tracker's left/right label, learned while
+  both hands are in view, decides which job a lone hand has (before, a chord hand near the body could be taken
+  for the strumming hand whenever that one blurred out); and looks go up to 30 a second when they are cheap.
 - The rest of the site was slow on integrated graphics too. Once the app fills the window, the journey's 3D
   shelves, records and vinyl (about 3,800 elements) are removed from the page and brought back on the way up;
   the collection row's animation no longer runs while the app is on screen; and on integrated graphics driving
