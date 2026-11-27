@@ -857,6 +857,15 @@ svg { display: block; }
 .queue__a { display: block; font-size: .8125rem; color: var(--chrome); }
 .queue button > span:last-child { min-width: 0; }
 
+/* Deep in the app, the journey's contents are removed (js/app.js keeps its box, so scrolling is unchanged) */
+.journey-off .journey__pin > * { display: none !important; }
+
+/* Plain panels where frosted glass is too much for the graphics card (js/app.js decides) */
+.lite .panel, .lite .now, .lite .bar, .lite .player { -webkit-backdrop-filter: none; backdrop-filter: none; }
+.lite .panel, .lite .now { background: linear-gradient(160deg, #34336B, #1D1B49 45%, #1B3F58); }
+.lite .bar { background: #0C0B24; }
+.lite .player { background: linear-gradient(180deg, #2A2760, #17153B); }
+
 /* =====================================================================
    AIR JAM
    ===================================================================== */

@@ -54,7 +54,7 @@
     guitar: 'acoustic',       // acoustic | electric
     view: null, viewToken: 0, gl: null,       // the 3D guitar, when three.js is available
     strumAt: null,                            // where the strumming spot is on screen (for sparks)
-    pose: null, poseT: 0, heldAt: -9, lastFret: null, handSize: 0,   // where the guitar is: it follows the hands
+    pose: null, poseT: 0, heldAt: -9, gripAt: -9, lastFret: null, handSize: 0, mask: [], maskAt: -9,   // where the guitar is: it follows the hands
     lastDrawTs: 0, lastDetectTs: 0, lastTs: 0, busy: false, fresh: false, slowFor: 0, ratio: 1, budget: 1280,
     drawMs: 0, gapMax: 0, diag: [], sampleAt: 0, startAt: 0,
     fit: { sx: 1, ox: 0, sy: 1, oy: 0 },      // how the camera picture is scaled to cover the stage
@@ -270,6 +270,7 @@
     if (!S.pose) S.pose = restPose();
     const P = S.pose, asp = S.aspect, dt = clamp(now - S.poseT, 0.001, 0.25);
     S.poseT = now;
+    if (now - S.heldAt > 1.5) S.gripAt = now;       // just picked up
     const ease = function (tau) { return 1 - Math.exp(-dt / tau); };
     let ux = Math.cos(P.ang), uy = Math.sin(P.ang);
     if (S.hands.strum) {
@@ -281,8 +282,20 @@
       P.x += (along * ux - across * uy) / asp; P.y += along * uy + across * ux;
     }
     if (S.hands.fret) {
-      const c = palm(S.hands.fret), dx = (P.x - c.x) * asp, dy = P.y - c.y;
-      if (Math.hypot(dx, dy) > 0.18 * P.L) P.ang += turn(clamp(Math.atan2(dy, dx), -1.25, 1.25), P.ang) * ease(0.12);
+      // The neck does not chase the chord hand. A hand sliding along the neck also drifts up and down, and
+      // near the body a small drift is a big angle, so chasing it made the guitar droop as the hand came in.
+      // Instead the guitar takes its angle from the hands when it is first picked up, kept within the range
+      // a guitar is really held at (level, to neck well up), and after that only turns, slowly, if the hand
+      // stays well off the line of the neck. The chord comes from how far along the neck the hand is,
+      // wherever it is across it.
+      const c = palm(S.hands.fret), dx = (P.x - c.x) * asp, dy = P.y - c.y, d = Math.hypot(dx, dy);
+      const want = clamp(Math.atan2(dy, dx), -0.1, 0.7);
+      if (now - S.gripAt < 0.6) { if (d > 0.3 * P.L) P.ang += turn(want, P.ang) * ease(0.12); }
+      else if (d > 0.25 * P.L) {
+        const off = Math.abs(-dx * uy + dy * ux), band = 0.14 * P.L;      // how far the hand is from the line of the neck
+        if (off > band) P.ang += turn(want, P.ang) * ease(0.9) * Math.min(1, (off - band) / band);
+      }
+      P.ang = clamp(P.ang, -0.1, 0.7);
       S.lastFret = { x: c.x, y: c.y };
     }
     // Size: follow the biggest hand span seen lately (a flat hand); shrink only very slowly
@@ -326,7 +339,10 @@
     } else {
       S.lone = null;
     }
-    if (hands.length) S.seenAt = now;
+    if (hands.length) {
+      S.seenAt = now; S.maskAt = now;
+      S.mask = hands.map(function (h) { return h.map(function (q) { return { x: S.lefty ? 1 - q.x : q.x, y: q.y }; }); });
+    }
     S.hands.fret = fret ? smoothHand(S.hands.fret, fret) : null;
     S.hands.strum = strumHand ? smoothHand(S.hands.strum, strumHand) : null;
     if (held && hands.length) holdGuitar(now);
@@ -503,7 +519,7 @@
     S.stream = null;
     if (S.video) S.video.srcObject = null;
     S.hands.fret = S.hands.strum = null; S.strumY = null; S.muted = false; S.lowLight = false; S.fps = 0; S.lineY = STRUM.y;
-    S.heldAt = -9; S.lastFret = null; S.handSize = 0; S.lastDetectAt = 0; S.ms = 0; S.sampleAt = 0; S.lastTs = 0; S.lastDrawTs = 0;
+    S.heldAt = -9; S.gripAt = -9; S.lastFret = null; S.handSize = 0; S.mask = []; S.maskAt = -9; S.lastDetectAt = 0; S.ms = 0; S.sampleAt = 0; S.lastTs = 0; S.lastDrawTs = 0;
     clearTimeout(S.timer); S.timer = 0;
     setLive(false);
     if (S.camera !== 'error') setCamera('off');
@@ -651,6 +667,7 @@
       const cs = Math.cos(P.ang);
       view.setPose({ x: fx(P.x), y: P.y, ux: S.lefty ? -cs : cs, uy: Math.sin(P.ang), L: P.L, lefty: S.lefty });
       view.update({ chord: S.chord, frets: CHORDS[S.chord].frets });
+      view.setHands(S.solo && nowSec - S.maskAt < 0.25 ? S.mask : []);      // the player's hands, drawn back over the guitar
       const L = view.labels();
       S.strumAt = { x: S.lefty ? 1 - L.strum.x : L.strum.x, y: L.strum.y };
       const zpx = ext().zw * P.L * H;                // names shrink with the neck when the guitar is small
@@ -729,15 +746,16 @@
     [['fret', '#2CE6D6'], ['strum', '#FF3D9A']].forEach(function (pair) {
       const h = S.hands[pair[0]];
       if (!h) return;
-      g.strokeStyle = 'rgba(241, 246, 252, .9)'; g.lineWidth = 2.5 * u;
+      const light = !!S.solo;                        // with the real hands shown over the guitar, the skeleton is only a hint
+      g.strokeStyle = light ? 'rgba(241, 246, 252, .4)' : 'rgba(241, 246, 252, .9)'; g.lineWidth = (light ? 1.5 : 2.5) * u;
       g.beginPath();
       CONNECTIONS.forEach(function (c) { g.moveTo(fx(h[c[0]].x) * W, h[c[0]].y * H); g.lineTo(fx(h[c[1]].x) * W, h[c[1]].y * H); });
       g.stroke();
       g.fillStyle = pair[1];
-      h.forEach(function (p) { g.beginPath(); g.arc(fx(p.x) * W, p.y * H, 4.5 * u, 0, 6.3); g.fill(); });
+      h.forEach(function (p) { g.beginPath(); g.arc(fx(p.x) * W, p.y * H, (light ? 2.5 : 4.5) * u, 0, 6.3); g.fill(); });
       const c = palm(h);
-      g.strokeStyle = pair[1]; g.lineWidth = 3 * u;
-      g.beginPath(); g.arc(fx(c.x) * W, c.y * H, 16 * u, 0, 6.3); g.stroke();
+      g.strokeStyle = pair[1]; g.lineWidth = (light ? 2 : 3) * u;
+      g.beginPath(); g.arc(fx(c.x) * W, c.y * H, (light ? 11 : 16) * u, 0, 6.3); g.stroke();
     });
     if (view) view.render(nowSec, amps, reduceMotion.matches);   // backdrop, guitar, then this overlay: all in the one canvas
     return busy;
@@ -868,7 +886,7 @@
       '</div>' +
       '<section class="about jam__how"><h3>How it works</h3><ol>' +
         '<li><b>Guitar.</b> Pick the acoustic or the electric. Each is a 3D model built in code, and each has its own sound; the electric adds a distortion switch.</li>' +
-        '<li><b>Holding it.</b> With the camera on, the guitar sits in your hands: its body at your strumming hand, its neck pointing at your other hand, sized from the size of your hands. Move, lean or tilt and it comes with you.</li>' +
+        '<li><b>Holding it.</b> With the camera on, the guitar sits in your hands, with your hands in front of it: its body at your strumming hand, its neck toward your other hand, sized from the size of your hands. It takes its angle when you pick it up and then holds it, so sliding along the neck does not swing it about. Move and it comes with you.</li>' +
         '<li><b>Chord hand.</b> Slide your other hand along the neck, closer to the body or further out. The neck is split into five zones, and the one your palm is over sets the chord: ' + CHORDS.map(function (c) { return c.name; }).join(', ') + '. The dots on the frets show how that chord is really fingered.</li>' +
         '<li><b>Strum hand.</b> Flick your strumming hand quickly across the strings, down or up. Any fast stroke plays; slow moves are ignored. A faster stroke is louder and brighter.</li>' +
         '<li><b>Mute.</b> Squeeze your chord hand into a tight fist to stop the strings. Strumming while it is closed gives a muted “chk”.</li>' +

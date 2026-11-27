@@ -50,9 +50,11 @@ An optional page in the app (`#/jam`, "Air Jam" in the navigation): air guitar w
 
 - **Two guitars.** An acoustic and an electric, each a 3D model built in code with three.js (no model files),
   each with its own sound. The choice is remembered.
-- **You hold it.** With the camera on, the guitar sits in your hands: the body at your strumming hand, the neck
-  pointing at your other hand, sized from the size of your hands. Move or tilt and it comes with you. With the
-  camera off it rests in the middle of the page.
+- **You hold it.** With the camera on, the guitar sits in your hands, and your hands are drawn in front of it
+  (a hand-shaped patch of the camera picture, built from the tracked points, is drawn back over the guitar).
+  The body sits at your strumming hand and the guitar is sized from the size of your hands. It takes its angle
+  from your hands when you pick it up, within the range a guitar is really held at, and then holds it: sliding
+  along the neck does not swing it about. With the camera off it rests in the middle of the page.
 - **Chord hand.** The neck is split into five zones (Em, G, C, D, Am). Slide your hand along the neck; the zone
   your palm is over sets the chord, and dots on the frets show how that chord is really fingered.
 - **Strum hand.** Any fast stroke across the strings plays a six-string strum, one per stroke; the strings
@@ -189,6 +191,10 @@ Air Jam checks (headless Chrome):
 
 Changes made along the way:
 
+- The rest of the site was slow on integrated graphics too. Once the app fills the window, the journey's 3D
+  shelves, records and vinyl (about 3,800 elements) are removed from the page and brought back on the way up;
+  the collection row's animation no longer runs while the app is on screen; and on integrated graphics driving
+  a high-density screen the frosted-glass panels become plain ones.
 - Air Jam first needed the strum hand to cross a fixed line and muted on any curled hand. On a real webcam
   that was hard to hit and a natural guitar grip muted everything, so strums now fire on any fast stroke and
   only a tight fist mutes. Canvas shadows and frosted panels were dropped while the camera runs, for speed.

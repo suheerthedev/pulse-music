@@ -294,6 +294,7 @@
     }
     function setVideo(video) {
       if (bgMesh) { bgScene.remove(bgMesh); bgMesh.geometry.dispose(); bgMesh.material.dispose(); bgTex.dispose(); bgMesh = bgTex = bgVideo = null; }
+      if (hMesh) { hScene.remove(hMesh); hMesh.material.dispose(); hMesh = null; hCount = 0; }
       still.visible = !video;
       if (!video) return;
       bgVideo = video;
@@ -301,7 +302,60 @@
       bgMesh = flat(bgTex, false);
       bgMesh.material.color.set(0xE2E2E2);
       bgScene.add(bgMesh);
+      hMesh = new THREE.Mesh(hGeo, new THREE.MeshBasicMaterial({ map: bgTex, color: 0xE2E2E2, side: THREE.DoubleSide, depthTest: false, depthWrite: false, toneMapped: false }));
+      hMesh.frustumCulled = false;
+      hScene.add(hMesh);
       fitVideo();
+    }
+    /* Hands in front. The tracker gives 21 points a hand; from them a hand-shaped patch is built (fingers and
+       forearm as rounded strips, the palm filled in) and the camera picture is drawn again inside that patch,
+       over the guitar. So the guitar hides the player's body but not the hands that are holding it. */
+    const HMAX = 6400, hPos = new Float32Array(HMAX * 3), hUv = new Float32Array(HMAX * 2);
+    const hGeo = new THREE.BufferGeometry(), hScene = new THREE.Scene();
+    hGeo.setAttribute('position', new THREE.BufferAttribute(hPos, 3));
+    hGeo.setAttribute('uv', new THREE.BufferAttribute(hUv, 2));
+    hGeo.setDrawRange(0, 0);
+    let hMesh = null, hCount = 0;
+    const FINGERS = [[5, 6], [6, 7], [7, 8], [9, 10], [10, 11], [11, 12], [13, 14], [14, 15], [15, 16], [17, 18], [18, 19], [19, 20]];
+    const THUMB = [[1, 2], [2, 3], [3, 4]], PALM = [0, 1, 2, 5, 9, 13, 17];
+    function setHands(hands) {
+      if (!hMesh) { hCount = 0; return; }
+      const asp = st.aspect;
+      let n = 0;
+      const put = function (x, y) { if (n >= HMAX) return; hPos[n * 3] = x * 2 - 1; hPos[n * 3 + 1] = 1 - y * 2; hPos[n * 3 + 2] = 0; hUv[n * 2] = x; hUv[n * 2 + 1] = 1 - y; n++; };
+      const disc = function (c, r) {
+        for (let k = 0; k < 10; k++) {
+          const a = k * Math.PI / 5, b = (k + 1) * Math.PI / 5;
+          put(c.x, c.y); put(c.x + Math.cos(a) * r / asp, c.y + Math.sin(a) * r); put(c.x + Math.cos(b) * r / asp, c.y + Math.sin(b) * r);
+        }
+      };
+      const strip = function (a, b, r) {                                // a rounded strip from a to b, r wide each side (in picture heights)
+        const dx = (b.x - a.x) * asp, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1e-6, nx = -dy / len * r / asp, ny = dx / len * r;
+        put(a.x + nx, a.y + ny); put(a.x - nx, a.y - ny); put(b.x + nx, b.y + ny);
+        put(a.x - nx, a.y - ny); put(b.x - nx, b.y - ny); put(b.x + nx, b.y + ny);
+        disc(a, r); disc(b, r);
+      };
+      (hands || []).forEach(function (h) {
+        if (!h || h.length < 21) return;
+        const dist = function (i, j) { return Math.hypot((h[i].x - h[j].x) * asp, h[i].y - h[j].y); };
+        const w = Math.max(dist(5, 17), 0.75 * dist(0, 9));              // palm width, or its length when the hand is edge-on
+        let cx = 0, cy = 0;
+        PALM.forEach(function (i) { cx += h[i].x; cy += h[i].y; });
+        const c = { x: cx / PALM.length, y: cy / PALM.length };
+        PALM.forEach(function (i, k) {                                    // the palm, filled, with a rounded rim
+          const j = PALM[(k + 1) % PALM.length];
+          put(c.x, c.y); put(h[i].x, h[i].y); put(h[j].x, h[j].y);
+          strip(h[i], h[j], 0.14 * w);
+        });
+        FINGERS.forEach(function (b) { strip(h[b[0]], h[b[1]], 0.118 * w); });
+        THUMB.forEach(function (b) { strip(h[b[0]], h[b[1]], 0.135 * w); });
+        // the start of the forearm, away from the fingers
+        const fx = (h[0].x - h[9].x) * asp, fy = h[0].y - h[9].y, fl = Math.hypot(fx, fy) || 1e-6;
+        strip(h[0], { x: h[0].x + fx / fl * 0.9 * w / asp, y: h[0].y + fy / fl * 0.9 * w }, 0.36 * w);
+      });
+      hCount = n;
+      hGeo.setDrawRange(0, n);
+      hGeo.attributes.position.needsUpdate = true; hGeo.attributes.uv.needsUpdate = true;
     }
     function setOverlay(canvas2d) {
       if (ovMesh) { ovScene.remove(ovMesh); ovMesh.geometry.dispose(); ovMesh.material.dispose(); ovTex.dispose(); ovMesh = ovTex = null; }
@@ -391,6 +445,7 @@
       renderer.render(bgScene, flatCam);
       renderer.clearDepth();
       renderer.render(scene, camera);
+      if (hMesh && hCount) { renderer.clearDepth(); renderer.render(hScene, flatCam); }
       if (ovMesh) { ovTex.needsUpdate = true; renderer.clearDepth(); renderer.render(ovScene, flatCam); }
     }
 
@@ -405,14 +460,14 @@
     }
 
     return {
-      setType: setType, update: update, setPose: setPose, setVideo: setVideo, setOverlay: setOverlay, resize: resize, render: render, labels: labels,
+      setType: setType, update: update, setPose: setPose, setVideo: setVideo, setOverlay: setOverlay, setHands: setHands, resize: resize, render: render, labels: labels,
       type: function () { return st.type; },
       /* Sizes the hand logic needs, in scale lengths: where the guitar starts and ends, and the chord zones on the neck */
       extents: function () { const m = st.model; return { xMin: m.xMin, xMax: m.xMax, bodyHalf: m.spec.bodyHalf, pick: PICK, z0: m.z0, zw: m.zw }; },
       /* How many canvas pixels per page pixel: fewer = less work for the graphics card */
       setRatio: function (r) { if (r !== st.ratio) { st.ratio = r; resize(); } },
       dispose: function () {
-        setVideo(null); setOverlay(null);
+        setVideo(null); setOverlay(null); hGeo.dispose();
         still.geometry.dispose(); still.material.map.dispose(); still.material.dispose();
         if (st.model) dispose(st.model.group);
         if (scene.environment) scene.environment.dispose();

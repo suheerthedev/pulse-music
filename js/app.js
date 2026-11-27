@@ -810,6 +810,7 @@
   function layoutJourney(force) {
     const w = window.innerWidth, vh = el.pin.offsetHeight || window.innerHeight;
     if (!force && w === J.w && Math.abs(vh - J.vh) < 140) return;   // ignore mobile toolbar show/hide
+    if (J.off) J.stale = true;                                      // its contents are not there to measure right now
     J.w = w; J.vh = vh;
     J.lead = Math.round(vh * 0.85);
     J.unit = Math.round(vh * 0.6);
@@ -818,10 +819,10 @@
     J.end = J.stops[J.stops.length - 1];
     el.journey.style.height = (J.end + vh) + 'px';
     const rec = J.recs[0] ? J.recs[0].offsetWidth : 0;
-    J.gap = Math.round((rec || 240) * 2.1);
+    if (rec || !J.gap) J.gap = Math.round((rec || 240) * 2.1);
     el.aisle.style.setProperty('--gap', J.gap + 'px');
     const card = $('.sc', el.stackRow);
-    J.card = card ? card.offsetWidth : 200;
+    if ((card && card.offsetWidth) || !J.card) J.card = card && card.offsetWidth ? card.offsetWidth : 200;
     J.front = -1;
     updateJourney();
   }
@@ -859,7 +860,15 @@
       J.inJ = inJ; document.body.classList.toggle('in-journey', inJ); el.player.inert = inJ;
       if (inJ && J.zone === 'stack' && !driftRaf) { driftAt = 0; driftRaf = requestAnimationFrame(driftLoop); }
     }
-    if (y > J.end + J.vh * 1.15) return;   // deep in the app: nothing to draw
+    // Deep in the app the journey is off screen: take its 3D shelves, records and vinyl out of the page
+    // altogether (thousands of elements and their layers), and bring them back when scrolling up toward it
+    const off = y >= J.end + J.vh - 2;       // the app's top edge is at or above the top of the window
+    if (off !== J.off) {
+      J.off = off;
+      document.body.classList.toggle('journey-off', off);
+      if (!off && J.stale) { J.stale = false; layoutJourney(true); return; }   // it was resized while away: measure it again
+    }
+    if (off) return;
     let p = clamp(y / J.lead, 0, 1), q = clamp((y - J.lead) / J.unit, 0, last);
     let s = clamp((y - J.stops[AISLE.length]) / J.unit, 0, 1);                       // camera swing to the side view
     let t = clamp((y - J.stops[AISLE.length + 1]) / J.unit, 0, STACK_STOPS - 1);     // travel along the row
@@ -1125,6 +1134,22 @@
   render();
   loadTrack(D.featured[0], false);
   document.documentElement.style.setProperty('--bar-h', el.player.offsetHeight + 'px');
+  /* Frosted glass means the browser re-blurs whatever is behind each panel whenever it changes. On integrated
+     graphics driving a high-density screen that alone held scrolling to a crawl, so there the panels are plain. */
+  (function () {
+    const check = function () {
+      try {
+        const c = document.createElement('canvas'), gl = c.getContext('webgl');
+        if (!gl) return;
+        const ext = gl.getExtension('WEBGL_debug_renderer_info'), name = String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
+        const lose = gl.getExtension('WEBGL_lose_context'); if (lose) lose.loseContext();
+        const dpr = window.devicePixelRatio || 1, pixels = window.screen.width * window.screen.height * dpr * dpr;
+        if (/Intel|SwiftShader|llvmpipe|Mali-4|Mali-T|Adreno \(TM\) [345]\d\d/i.test(name) && pixels > 3.5e6) document.documentElement.classList.add('lite');
+      } catch (e) { /* no WebGL: leave the page as it is */ }
+    };
+    if (window.requestIdleCallback) window.requestIdleCallback(check, { timeout: 1500 }); else setTimeout(check, 300);
+  })();
+
   layoutJourney(true);
   findCanvases();
   paint();
