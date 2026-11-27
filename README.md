@@ -191,6 +191,13 @@ Air Jam checks (headless Chrome):
 
 Changes made along the way:
 
+- Fast strumming still dropped strokes: the hand is a blur and is simply not found in many looks. Strokes are
+  now read from turning points in the tracker's own (unsmoothed) positions instead of look-to-look speed; and
+  once the recent strokes fit an even pace, a stroke that falls due unseen is played anyway (not if the hand is
+  in view and still, and at most two in a row). In a scripted test of 8 strokes a second with the hand missing
+  from 43% of looks, 21 of 24 strokes sounded, against 17 before. Looks are now paced by their own cost
+  (a 20 ms look is taken every 38 ms) instead of being rounded to every other tick, and the camera is asked
+  for 60 frames a second where it has them.
 - On a real webcam the tracker sometimes let go of a hand that was plainly in view (a strumming hand is blurred
   and often edge-on). Its confidence bars are now lower than the library's defaults; a hand missed for a look
   or two stays where it was on screen and in the status line; the tracker's left/right label, learned while

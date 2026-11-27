@@ -66,7 +66,7 @@
     seenAt: 0, lowLight: false, lightAt: 0,
     strumX: 0, strumY: null, strumT: 0, strumV: 0, lastStrumAt: 0, lastDir: -1,
     fistFrames: 0, openFrames: 0, lone: null, wantChord: -1,
-    stroke: { dir: 0, travel: 0, fired: false }, lineY: STRUM.y,
+    zig: { t: 0, dir: 0, lo: 0, hi: 0, loT: 0, hiT: 0, prev: 0, still: false }, rh: { times: [], dir: 0, vel: 0.5, last: 0, fills: 0, P: 0 }, filled: 0, lineY: STRUM.y,
     ms: 0, fps: 0, lastDetectAt: 0, delegate: '', bench: null,
     strings: [0, 1, 2, 3, 4, 5].map(function () { return { amp: 0, t0: 0 }; }),
     particles: [], strums: 0, last: null, status: '', statusAt: 0, pr: 1
@@ -116,7 +116,9 @@
     if (A.ctx) { if (A.ctx.state !== 'running') A.ctx.resume(); return true; }
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return false;
-    const ctx = A.ctx = new AC();
+    let ctx;
+    try { ctx = new AC({ latencyHint: 'interactive' }); } catch (e) { ctx = new AC(); }   // shortest delay between a stroke and its sound
+    A.ctx = ctx;
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -14; comp.ratio.value = 4; comp.attack.value = 0.003; comp.release.value = 0.2;
     const master = ctx.createGain(); master.gain.value = 0.9;
@@ -279,7 +281,7 @@
       // a stroke's width either way before the guitar moves at all, so strumming does not shake it
       const c = palm(S.hands.strum), ex = (c.x - P.x) * asp, ey = c.y - P.y;
       const slack = function (v, z) { return v > z ? v - z : v < -z ? v + z : 0; };
-      const along = slack(ex * ux + ey * uy, 0.03 * P.L) * ease(0.3), across = slack(-ex * uy + ey * ux, 0.11 * P.L) * ease(0.6);
+      const along = slack(ex * ux + ey * uy, 0.03 * P.L) * ease(0.22), across = slack(-ex * uy + ey * ux, 0.11 * P.L) * ease(0.5);
       P.x += (along * ux - across * uy) / asp; P.y += along * uy + across * ux;
     }
     if (S.hands.fret) {
@@ -386,29 +388,94 @@
       S.muted = false; syncPads();
     }
 
-    // Strum hand: any fast stroke across the strings plays, wherever the hand is. One strum per stroke.
-    // "Across" follows the guitar: with the neck tilted, a stroke at right angles to it still counts in full.
-    if (S.hands.strum) {
-      const p = centre(S.hands.strum);
-      if (S.strumY !== null && now > S.strumT && now - S.strumT < 0.4) {
-        const dy = -(p.x - S.strumX) * asp * uy + (p.y - S.strumY) * ux, v = dy / (now - S.strumT);   // picture heights per second
-        S.strumV = S.strumV * 0.4 + v * 0.6;
-        const dir = v > 0.25 ? 1 : v < -0.25 ? -1 : 0, k = S.stroke;
-        if (!dir) { k.dir = 0; k.travel = 0; k.fired = false; }
-        else if (dir !== k.dir) { k.dir = dir; k.travel = Math.abs(dy); k.fired = false; }
-        else k.travel += Math.abs(dy);
-        const speed = Math.max(Math.abs(S.strumV), Math.abs(v) * 0.8);
-        if (dir && !k.fired && k.travel >= 0.05 && speed > 0.6 && now - S.lastStrumAt > 0.09) {
-          k.fired = true; S.lastStrumAt = now;
-          const c = palm(S.hands.strum);
-          strum(dir, (speed - 0.5) / 2.4, { x: held ? c.x : clamp(c.x, STRUM.x0, STRUM.x1), y: p.y });
+    // Strum hand: every fast stroke across the strings plays once.
+    // Fast strumming is exactly when the tracker sees least: the hand is a blur and is found in some looks and
+    // not in others. So strokes are not judged by speed from one look to the next, but by turning points: the
+    // hand was up there, now it is down here, so there was a downstroke in between, however few looks caught
+    // it. The position is the tracker's own (not smoothed), measured across the strings, so a tilted neck
+    // still counts a stroke in full.
+    if (strumHand) {
+      const c = centre(strumHand), a = -(c.x * asp) * uy + c.y * ux, Z = S.zig;
+      const T = Math.max(0.045, 0.06 * (P ? P.L : 0.8));               // how far the hand must travel to count as a stroke
+      Z.still = Z.t > 0 && now - Z.t < 0.2 && Math.abs(a - Z.prev) < 0.3 * T;                // two sightings in the same place
+      Z.prev = a;
+      if (!Z.t || now - Z.t > 0.45) { Z.dir = 0; Z.lo = Z.hi = a; Z.loT = Z.hiT = now; }      // after a real pause, start afresh
+      else {
+        let fire = 0, speed = 0;
+        if (Z.dir <= 0) {                           // waiting for a downstroke, from the top turning point (lo)
+          if (a < Z.lo) Z.lo = a;
+          if (a - Z.lo < 0.35 * T) Z.loT = now;     // still up there: the stroke has not started yet
+          else if (a - Z.lo >= T) {
+            speed = (a - Z.lo) / Math.max(0.02, now - Z.loT);
+            if (speed >= 0.45) fire = 1;            // slower than that is the hand being moved, not a stroke
+            Z.dir = 1; Z.hi = a; Z.hiT = now;
+          }
         }
-        S.lineY += (clamp(p.y, 0.2, 0.8) - S.lineY) * Math.min(1, (now - S.strumT) / 1.2);   // flat picture: strings drift to the hand
+        if (!fire && Z.dir >= 0) {                  // waiting for an upstroke, from the bottom turning point (hi)
+          if (a > Z.hi) Z.hi = a;
+          if (Z.hi - a < 0.35 * T) Z.hiT = now;
+          else if (Z.hi - a >= T) {
+            speed = (Z.hi - a) / Math.max(0.02, now - Z.hiT);
+            if (speed >= 0.45) fire = -1;
+            Z.dir = -1; Z.lo = a; Z.loT = now;
+          }
+        }
+        // A stroke that was already played on trust (see keepTime) is not played again when the hand turns up
+        const R = S.rh, played = R.fills > 0 && now - R.last < 0.55 * (R.P || 0.2);
+        if (fire && played) R.fills = 0;
+        else if (fire && now - S.lastStrumAt > 0.07) {
+          S.lastStrumAt = now;
+          const q = palm(strumHand), vel = (speed - 0.4) / 2.4;
+          strum(fire, vel, { x: held ? q.x : clamp(q.x, STRUM.x0, STRUM.x1), y: c.y });
+          beat(now, fire, vel, false);
+        }
+        S.lineY += (clamp(c.y, 0.2, 0.8) - S.lineY) * Math.min(1, (now - Z.t) / 1.2);   // flat picture: strings drift to the hand
       }
-      S.strumX = p.x; S.strumY = p.y; S.strumT = now;
-    } else if (S.strumY !== null && now - S.strumT > 0.4) {
-      // Fast hands blur and drop out for a frame or two: only forget the stroke after a real pause
-      S.strumY = null; S.strumV = 0; S.stroke.dir = 0; S.stroke.travel = 0; S.stroke.fired = false;
+      Z.t = now;
+    }
+    keepTime(now);
+  }
+
+  /* Keeping time. Steady fast strumming is when the camera sees least: the hand is a blur, found in some looks
+     and not in others, and whole strokes go by unseen. But steady strumming is also predictable. Once the
+     recent strokes fit an even pace (allowing for missed ones in between), a stroke that falls due and has not
+     been seen is played anyway, in the next direction and at the same strength. Not if the hand is in view
+     and holding still, and at most two in a row. If the player has in fact stopped with the hand out of view,
+     that is one or two strokes too many; if not, the rhythm no longer falls apart. */
+  function beat(now, dir, vel, filled) {
+    const R = S.rh;
+    R.times.push(now); if (R.times.length > 6) R.times.shift();
+    R.dir = dir; R.vel = vel; R.last = now; R.fills = filled ? R.fills + 1 : 0;
+    if (filled) return;
+    // The pace: the typical recent gap, if every recent gap is that or a whole number of it (a stroke or two
+    // missed). Strokes are only timed to the nearest look, so the fit allows for one look either way.
+    R.P = 0;
+    const n = R.times.length;
+    if (n < 5) return;
+    const g = [];
+    for (let i = n - 4; i < n; i++) g.push(R.times[i] - R.times[i - 1]);
+    const sorted = g.slice().sort(function (x, y) { return x - y; }), base = (sorted[1] + sorted[2]) / 2;
+    if (base < 0.08 || base > 0.45) return;
+    let span = 0, count = 0, singles = 0;
+    for (let i = 0; i < g.length; i++) {
+      const k = Math.max(1, Math.round(g[i] / base));
+      if (k > 3 || Math.abs(g[i] - k * base) > Math.max(0.3 * base, 0.05)) return;
+      span += g[i]; count += k; if (k === 1) singles++;
+    }
+    if (singles >= 2) R.P = span / count;
+  }
+  function keepTime(now) {
+    const R = S.rh, Z = S.zig;
+    if (!R.P) return;
+    if (now - R.last > 2.6 * R.P) { R.P = 0; R.times.length = 0; R.fills = 0; return; }       // the rhythm has ended
+    const resting = now - Z.t < 0.06 && Z.still;                     // in view right now, and not moving
+    if (!resting && R.fills < 2 && now - R.last >= 1.2 * R.P && now - S.lastStrumAt > 0.07) {
+      S.lastStrumAt = now;
+      const h = S.shown.strum, q = h ? palm(h) : null;
+      strum(-R.dir, R.vel, q ? { x: q.x, y: q.y } : null);
+      beat(R.last + R.P, -R.dir, R.vel, true);
+      S.filled++;
+      Z.dir = -Z.dir;                                // the hand is now at its other turning point
     }
   }
 
@@ -497,7 +564,7 @@
         : 'This browser cannot open a camera. You can still play with the buttons and keys below.');
     }
     try {
-      S.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } }, audio: false });
+      S.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 60 } }, audio: false });
     } catch (e) {
       const n = e && e.name;
       return fail(n === 'NotAllowedError' || n === 'SecurityError'
@@ -533,7 +600,7 @@
     if (S.stream) S.stream.getTracks().forEach(function (t) { t.stop(); });
     S.stream = null;
     if (S.video) S.video.srcObject = null;
-    S.hands.fret = S.hands.strum = null; S.strumY = null; S.muted = false; S.lowLight = false; S.fps = 0; S.lineY = STRUM.y;
+    S.hands.fret = S.hands.strum = null; S.zig.t = 0; S.rh.P = 0; S.rh.times.length = 0; S.rh.fills = 0; S.muted = false; S.lowLight = false; S.fps = 0; S.lineY = STRUM.y;
     S.shown.fret = S.shown.strum = null; S.shownAt.fret = S.shownAt.strum = -9; S.chordSide = 0;
     S.heldAt = -9; S.gripAt = -9; S.lastFret = null; S.handSize = 0; S.mask = []; S.maskAt = -9; S.lastDetectAt = 0; S.ms = 0; S.sampleAt = 0; S.lastTs = 0; S.lastDrawTs = 0;
     clearTimeout(S.timer); S.timer = 0;
@@ -790,7 +857,7 @@
     if (S.lastTs) S.gapMax = Math.max(S.gapMax, t - S.lastTs);
     S.lastTs = t;
     if (S.video.readyState >= 2) {
-      const idle = now - S.seenAt > 3, every = Math.max(idle ? 100 : 33, Math.min(250, 2.2 * S.ms)) - 5;
+      const idle = now - S.seenAt > 3, every = Math.max(idle ? 100 : 33, Math.min(250, 1.9 * S.ms)) - 6;
       if (S.landmarker && !TR.busy && S.video.currentTime !== S.lastVideoTime && t - S.lastDetectTs >= every) {
         S.lastVideoTime = S.video.currentTime; S.lastDetectTs = t;
         S.stamp = Math.max(S.stamp + 1, t);                             // the tracker needs strictly increasing times
@@ -808,7 +875,9 @@
     S.drawMs = S.drawMs * 0.9 + (performance.now() - d0) * 0.1;
     S.lastDrawTs = t;
     if (fresh) tune(now);
-    S.next = Math.max(S.next + 33, performance.now() + 4);
+    // The next tick: as soon as the next look is due (a look that takes 20 ms is taken every 38 ms), but at
+    // least 15 and at most 30 times a second, so the picture keeps moving when looks are slow
+    S.next = Math.max(t + clamp(now - S.seenAt > 3 ? 50 : 1.9 * S.ms, 33, 66), performance.now() + 4);
     S.timer = setTimeout(tick, S.next - performance.now());
   }
   /* With the camera off: draw on animation frames, only while something is moving */
@@ -1076,7 +1145,7 @@
     html: html, mount: mount, unmount: unmount, handleKey: handleKey,
     // Test hooks: feed synthetic hand landmarks and read the state back
     _feed: function (hands, now, sides) { processHands(hands, now, sides); kick(); },
-    _state: function () { return { chord: CHORDS[S.chord].name, muted: S.muted, padMute: S.padMute, dist: S.dist, lefty: S.lefty, chordSide: S.chordSide, base: Math.round(TR.base), canvas: S.canvas ? [S.canvas.width, S.canvas.height] : null, drawMs: Math.round(S.drawMs * 10) / 10, guitar: S.guitar, view: S.view ? S.view.type() : null, live: S.live, edges: FLAT_EDGES, pose: S.pose, ratio: S.ratio, fit: S.fit, delegate: S.delegate, ms: Math.round(S.ms), fps: Math.round(S.fps), strums: S.strums, last: S.last, camera: S.camera, status: S.status, notes: Object.keys(A.bufs).length, ctx: A.ctx ? A.ctx.state : 'none' }; },
+    _state: function () { return { chord: CHORDS[S.chord].name, muted: S.muted, padMute: S.padMute, dist: S.dist, lefty: S.lefty, chordSide: S.chordSide, rhythm: { P: Math.round(S.rh.P * 1000), fills: S.filled, times: S.rh.times.map(function (x) { return Math.round(x * 1000) / 1000; }) }, base: Math.round(TR.base), canvas: S.canvas ? [S.canvas.width, S.canvas.height] : null, drawMs: Math.round(S.drawMs * 10) / 10, guitar: S.guitar, view: S.view ? S.view.type() : null, live: S.live, edges: FLAT_EDGES, pose: S.pose, ratio: S.ratio, fit: S.fit, delegate: S.delegate, ms: Math.round(S.ms), fps: Math.round(S.fps), strums: S.strums, last: S.last, camera: S.camera, status: S.status, notes: Object.keys(A.bufs).length, ctx: A.ctx ? A.ctx.state : 'none' }; },
     _audio: function () { return A; },
     // Where the middle of chord zone i is right now, across and down the mirrored picture
     _zonePoint: function (i) {
